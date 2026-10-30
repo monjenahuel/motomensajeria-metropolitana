@@ -1,70 +1,143 @@
-# Clase 10 — Arquitectura de Software 1
 # Un solo comando levanta todo:   docker compose up -d --build
 
 services:
 
-  # Base de datos. No publica puertos: solo la ven los servicios de la red "backend".
-  db:
+  envios-db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: cursos
-      POSTGRES_USER: cursos
-      POSTGRES_PASSWORD: cursos123        # en un proyecto real, esto va en un archivo .env que NO se sube al repo
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - pgdata:/var/lib/postgresql/data   # volumen con nombre: los datos sobreviven a los contenedores
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro   # bind mount: script que corre la primera vez
+      - pgdata:/var/lib/postgresql/data
+      - ./envios/envios-db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cursos -d cursos"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 3s
       retries: 10
     networks:
       - backend
 
-  # API REST de cursos. Se construye desde ./api (Dockerfile propio).
-  api:
-    build: ./api
+  # Base de Keycloak
+  # Red propia (kc-net): ni la API ni el BFF pueden llegar a esta base.
+  keycloak-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME}
+      POSTGRES_USER: ${KC_DB_USER}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD}
+    volumes:
+      - kcdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER} -d ${KC_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - kc-net
+
+  # Keycloak
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm   # para producción: "start" (+ HTTPS/proxy)
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/${KC_DB_NAME}
+      KC_DB_USERNAME: ${KC_DB_USER}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      # URL pública (la que ve el navegador). Define el "iss" de los tokens.
+      KC_HOSTNAME: http://localhost:8081
+      # Hacia adentro de la red, Keycloak responde con su nombre interno (http://keycloak:8080)
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
+    ports:
+      - "8081:8080"        # 8080 ya lo usa swagger-ui
+    healthcheck:
+      # La imagen no trae curl: se consulta el puerto de gestión (9000) con bash
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"status\": \"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    networks:
+      - kc-net      # para hablar con su base
+      - backend     # para que gateway/servicios lean el JWKS
+
+  # API Gateway
+  gateway:
+    build: ./apigateway
     environment:
       PORT: 3000
-      DB_HOST: db          # service discovery: el nombre del servicio ES el hostname
-      DB_PORT: 5432
-      DB_NAME: cursos
-      DB_USER: cursos
-      DB_PASSWORD: cursos123
+      ENVIOS_URL: http://envios:3000
+      BFF_MOBILE_URL: http://bff-mobile:3001
+      KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs      
     ports:
-      - "3000:3000"        # puerto_host:puerto_contenedor
+      - "3000:3000"        # ahora este es el puerto que usa el frontend
     depends_on:
-      db:
-        condition: service_healthy   # espera a que Postgres responda, no solo a que arranque
+      keycloak:
+        condition: service_healthy
+      envios:
+        condition: service_started
+      # bff-mobile:
+      #   condition: service_started
     networks:
       - backend
 
-  # Backend For Frontend para la app mobile: le habla a la API por nombre (http://api:3000).
-  bff-mobile:
-    build: ./bff-mobile
+  # Microservicio de envíos
+  envios:
+    build: ./envios
     environment:
-      PORT: 3001
-      API_URL: http://api:3000
-    ports:
-      - "3001:3001"
+      PORT: 3000
+      DB_HOST: envios-db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
     depends_on:
-      - api
+      envios-db:
+        condition: service_healthy
     networks:
       - backend
 
-  # Documentación autogenerada a partir del contrato OpenAPI.
-  # No está en "backend": no necesita hablar con nadie. Quien llama a la API es tu navegador.
+  
+  # TODO: Es necesario para nuestro proyecto?
+  # BFF para móvil
+  # bff-mobile:
+  #   build: ./bff-mobile
+  #   environment:
+  #     PORT: 3001
+  #     API_URL: http://envios:3000
+  #     KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
+  #     KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
+  #   depends_on:
+  #     - envios
+  #   networks:
+  #     - backend
+
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.17.14
     environment:
       SWAGGER_JSON: /spec/openapi.yaml
     volumes:
-      - ./openapi.yaml:/spec/openapi.yaml:ro   # bind mount: editás el contrato y recargás, sin rebuild
+      - ./openapi.yaml:/spec/openapi.yaml:ro
     ports:
       - "8080:8080"
 
 volumes:
   pgdata:
+  kcdata:
 
 networks:
   backend:
+  kc-net:

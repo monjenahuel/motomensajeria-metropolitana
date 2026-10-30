@@ -1,0 +1,124 @@
+{
+  "realm": "motomensajeria",
+  "displayName": "Motomensajería Metropolitana",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "accessTokenLifespan": 900,
+  "roles": {
+    "realm": [
+      {
+        "name": "administrador",
+        "description": "Gestion"
+      },
+      {
+        "name": "operador",
+        "description": "Asigna envios"
+      },
+      {
+        "name": "cadete",
+        "description": "Actualiza el estado de sus envios asignados"
+      },
+      {
+        "name": "cliente",
+        "description": "Crea y sigue sus envios"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "motomensajeria-web",
+      "name": "Frontend Angular",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:4200",
+      "baseUrl": "/",
+      "redirectUris": ["http://localhost:4200/*"],
+      "webOrigins": ["http://localhost:4200"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:4200/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "motomensajeria-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "motomensajeria-api",
+      "name": "Backend (gateway y microservicios)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin.demo",
+      "email": "admin.demo@motomensajeria.local",
+      "firstName": "Ana",
+      "lastName": "Administradora",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "admin123", "temporary": false }
+      ],
+      "realmRoles": ["administrador"]
+    },
+    {
+      "username": "operador.demo",
+      "email": "operador.demo@motomensajeria.local",
+      "firstName": "Diego",
+      "lastName": "operador",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "operador123", "temporary": false }
+      ],
+      "realmRoles": ["operador"]
+    },
+    {
+      "username": "cadete.demo",
+      "email": "cadete.demo@motomensajeria.local",
+      "firstName": "Marcos",
+      "lastName": "cadete",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "cadete123", "temporary": false }
+      ],
+      "realmRoles": ["cadete"]
+    },
+    {
+      "username": "cliente.demo",
+      "email": "cliente.demo@motomensajeria.local",
+      "firstName": "Carla",
+      "lastName": "Cliente",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "cliente123", "temporary": false }
+      ],
+      "realmRoles": ["cliente"]
+    }
+  ]
+}
