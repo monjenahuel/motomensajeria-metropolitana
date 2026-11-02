@@ -1,152 +1,299 @@
 openapi: 3.0.3
 info:
-  title: API de motomensajeria
+  title: API de Motomensajería Metropolitana
   version: 1.0.0
   description: |
-    API de ejemplo de la Clase 10 (Arquitectura de Software 1 — UNAHUR).
-    Este archivo es el **contrato**: Swagger UI genera esta documentación a partir de él.
+    API REST para la gestión de envíos, asignación por operadores y actualización de estados por cadetes.
+    Protegida mediante OIDC (Keycloak) con validación de roles en Gateway y Microservicio (Zero Trust).
+    Los eventos de dominio se publican asíncronamente vía RabbitMQ (Topic Exchange).
 servers:
   - url: http://localhost:3000
-    description: API levantada con docker compose (vista desde tu navegador)
+    description: API Gateway (Punto de entrada unificado)
 tags:
-  - name: Cursos
+  - name: Envíos
+    description: Ciclo de vida y tracking de envíos
+  - name: Sistema
+    description: Verificación de salud y diagnóstico
+
+security:
+  - BearerAuth: []
+
 paths:
-  /cursos:
+  /health:
     get:
-      tags: [Cursos]
-      summary: Listar cursos
-      operationId: listarCursos
+      tags: [Sistema]
+      summary: Health check público del servicio
+      security: []
       responses:
         '200':
-          description: Lista de cursos
+          description: Servicio y base de datos operativos
+
+  /envios:
+    get:
+      tags: [Envíos]
+      summary: Listar envíos
+      description: |
+        Filtra automáticamente por rol:
+        - `cliente`: solo ve los envíos que creó.
+        - `cadete`: solo ve los envíos que tiene asignados.
+        - `operador` o `administrador`: ve todos los envíos.
+      responses:
+        '200':
+          description: Lista de envíos permitidos para el usuario autenticado
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Curso'
+                  $ref: '#/components/schemas/Envio'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+
     post:
-      tags: [Cursos]
-      summary: Crear un curso
-      operationId: crearCurso
+      tags: [Envíos]
+      summary: Crear un nuevo envío
+      description: Permite a clientes o staff registrar un nuevo envío. Publica el evento `envio.creado` al broker.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CursoNuevo'
-            example:
-              nombre: Ingeniería de Software
-              cupo: 30
-              docente: Equipo docente
+              type: object
+              required: [origen, destino]
+              properties:
+                origen:
+                  type: string
+                  example: Av. Corrientes 1000, CABA
+                destino:
+                  type: string
+                  example: Av. Cabildo 2000, CABA
+                lat_origen:
+                  type: number
+                  example: -34.6037
+                lon_origen:
+                  type: number
+                  example: -58.3816
+                lat_destino:
+                  type: number
+                  example: -34.5614
+                lon_destino:
+                  type: number
+                  example: -58.4563
       responses:
         '201':
-          description: Curso creado
-          headers:
-            Location:
-              description: URI del curso creado
-              schema:
-                type: string
-                example: /cursos/4
+          description: Envío creado exitosamente
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Curso'
+                $ref: '#/components/schemas/Envio'
         '400':
-          $ref: '#/components/responses/Invalido'
-  /cursos/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: integer
-          example: 1
+          $ref: '#/components/responses/ProblemDetails400'
+
+  /envios/{id}:
     get:
-      tags: [Cursos]
-      summary: Obtener un curso
-      operationId: obtenerCurso
+      tags: [Envíos]
+      summary: Consultar detalle de un envío con historial
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
       responses:
         '200':
-          description: El curso
+          description: Detalle del envío e historial de transiciones
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Curso'
-        '400':
-          $ref: '#/components/responses/Invalido'
+                $ref: '#/components/schemas/EnvioConHistorial'
         '404':
-          $ref: '#/components/responses/NoEncontrado'
-    delete:
-      tags: [Cursos]
-      summary: Eliminar un curso
-      operationId: eliminarCurso
+          $ref: '#/components/responses/ProblemDetails404'
+
+  /envios/{id}/asignar:
+    patch:
+      tags: [Envíos]
+      summary: Asignar un envío a un cadete (Caso de uso del Operador)
+      description: |
+        Exclusivo de usuarios con rol `operador` o `administrador`.
+        Transiciona el envío de `PENDIENTE` a `ASIGNADO` y emite el evento `envio.asignado` en RabbitMQ.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mensajero]
+              properties:
+                mensajero:
+                  type: string
+                  description: Username de Keycloak del cadete asignado
+                  example: cadete.demo
       responses:
-        '204':
-          description: Eliminado (sin cuerpo)
-        '400':
-          $ref: '#/components/responses/Invalido'
+        '200':
+          description: Envío asignado exitosamente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envio'
         '404':
-          $ref: '#/components/responses/NoEncontrado'
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          description: El envío no se encuentra en estado PENDIENTE
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /envios/{id}/estado:
+    patch:
+      tags: [Envíos]
+      summary: Actualizar estado de envío (Cadete)
+      description: Exclusivo del `cadete` asignado al envío. Emite el evento `envio.estado_actualizado` en RabbitMQ.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [estado]
+              properties:
+                estado:
+                  type: string
+                  enum: [EN_CAMINO, ENTREGADO, NO_ENTREGADO]
+                motivo:
+                  type: string
+                  example: Retirado en origen y en tránsito
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envio'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token emitido por Keycloak (`POST http://localhost:8081/realms/motomensajeria/protocol/openid-connect/token`)
+
   schemas:
-    CursoNuevo:
+    Envio:
       type: object
-      required: [nombre, cupo]
       properties:
-        nombre:
-          type: string
-          example: Arquitectura de Software 1
-        cupo:
+        id:
           type: integer
-          minimum: 1
-          example: 40
-        docente:
+        numero_seguimiento:
+          type: string
+        origen:
+          type: string
+        destino:
+          type: string
+        estado:
+          type: string
+          enum: [PENDIENTE, ASIGNADO, EN_CAMINO, ENTREGADO, NO_ENTREGADO, CANCELADO]
+        cliente:
+          type: string
+        mensajero:
           type: string
           nullable: true
-        descripcion:
+        operador_asignador:
           type: string
           nullable: true
-    Curso:
-      allOf:
-        - type: object
-          required: [id, creadoEn]
-          properties:
-            id:
-              type: integer
-              example: 1
-            creadoEn:
-              type: string
-              format: date-time
-        - $ref: '#/components/schemas/CursoNuevo'
-    ProblemDetails:
-      description: Formato de error estándar (RFC 9457, antes RFC 7807)
+        consultas_mapas_realizadas:
+          type: integer
+          description: Control de cuota NFR-3 (máximo 5 por ciclo de vida)
+        fecha_creacion:
+          type: string
+          format: date-time
+        fecha_asignacion:
+          type: string
+          format: date-time
+          nullable: true
+
+    HistorialEvento:
       type: object
+      properties:
+        id:
+          type: integer
+        estado_anterior:
+          type: string
+          nullable: true
+        estado_nuevo:
+          type: string
+        cambiado_por:
+          type: string
+        motivo:
+          type: string
+          nullable: true
+        registrado_en:
+          type: string
+          format: date-time
+
+    EnvioConHistorial:
+      allOf:
+        - $ref: '#/components/schemas/Envio'
+        - type: object
+          properties:
+            historial:
+              type: array
+              items:
+                $ref: '#/components/schemas/HistorialEvento'
+
+    ProblemDetails:
+      type: object
+      required: [type, title, status]
       properties:
         type:
           type: string
-          example: about:blank
         title:
           type: string
-          example: Curso no encontrado
         status:
           type: integer
-          example: 404
         detail:
           type: string
-          example: No existe un curso con id 99.
         instance:
           type: string
-          example: /cursos/99
+
   responses:
-    NoEncontrado:
-      description: El recurso no existe
+    ProblemDetails400:
+      description: Solicitud inválida (RFC 9457)
       content:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
-    Invalido:
-      description: Datos de entrada inválidos
+    ProblemDetails401:
+      description: No autenticado o token vencido (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ProblemDetails403:
+      description: Rol insuficiente para la operación (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ProblemDetails404:
+      description: Recurso no encontrado (RFC 9457)
       content:
         application/problem+json:
           schema:
