@@ -22,7 +22,7 @@ A partir de las especificaciones del escenario 3B se establecen los siguientes p
 
 ---
 
-## 2. Escenarios de Calidad (SEI / Bass, Clements, Kazman)
+## 2. Escenarios de Calidad
 
 Cada requerimiento no funcional se formaliza mediante la estructura canónica de seis partes:
 1. **Fuente del estímulo (*Source*):** Entidad interna o externa que genera la condición.
@@ -34,9 +34,9 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 
 ---
 
-### NFR-1: Tiempo Real / Latencia (Atributo Estrella)
+### NFR-1: Tiempo Real
 
-#### Escenario 1.1: Propagación de Cambio de Estado en Vivo (Push al Cliente)
+#### Escenario 1.1: Propagación de Cambio de Estado en Vivo
 * **Fuente del estímulo:** Operador (al asignar) o Cadete (al transicionar estado: `retirado`, `en camino`, `entregado`).
 * **Estímulo:** Envío de comando vía API REST (`PATCH /envios/{id}/estado` o `POST /envios/{id}/asignar`).
 * **Artefacto:** Core de Envíos, Message Broker (RabbitMQ), Gateway/BFF y conexión en vivo (SSE/WebSocket) con el cliente.
@@ -58,7 +58,7 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 
 ---
 
-### NFR-2: Modificabilidad / Extensibilidad (Atributo Estrella)
+### NFR-2: Extensibilidad
 
 #### Escenario 2.1: Incorporación de Nuevos Módulos Funcionales Autónomos
 * **Fuente del estímulo:** Nuevos equipos de desarrollo (Facturación automática, Premios para cadetes, Analítica operativa).
@@ -81,7 +81,7 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 
 ---
 
-### NFR-3: Eficiencia de Costos (Restricción Crítica)
+### NFR-3: Eficiencia de Costos
 
 #### Escenario 3.1: Aislamiento Estricto de Telemetría respecto a APIs Externas Pagas
 * **Fuente del estímulo:** Flujo constante de telemetría de 600 cadetes (≈ 5,2 millones de pings/día).
@@ -123,7 +123,7 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 
 ---
 
-### NFR-5: Disponibilidad y Resiliencia (Fault Tolerance)
+### NFR-5: Disponibilidad y Resiliencia
 
 #### Escenario 5.1: Degradación Elegante ante Caída del Servicio Externo de Mapas
 * **Fuente del estímulo:** Falla de red, caída de proveedor o agotamiento de cuota en el Servicio de Mapas.
