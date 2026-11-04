@@ -1,9 +1,13 @@
 # Un solo comando levanta todo:   docker compose up -d --build
+# Arquitectura: Microservicios con Broker de Eventos (EDA) + OIDC (Keycloak)
+# Arquitectura de Software 1 - UNAHUR
 
 services:
 
+  # 1. Base de datos del microservicio de envíos
   envios-db:
     image: postgres:16-alpine
+    container_name: envios-db
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
@@ -11,6 +15,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./envios/envios-db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
@@ -19,10 +25,11 @@ services:
     networks:
       - backend
 
-  # Base de Keycloak
-  # Red propia (kc-net): ni la API ni el BFF pueden llegar a esta base.
+  # 2. Base de Keycloak
+  # Red propia (kc-net): ni la API ni los servicios pueden llegar a esta base directamente.
   keycloak-db:
     image: postgres:16-alpine
+    container_name: keycloak-db
     environment:
       POSTGRES_DB: ${KC_DB_NAME}
       POSTGRES_USER: ${KC_DB_USER}
@@ -37,10 +44,11 @@ services:
     networks:
       - kc-net
 
-  # Keycloak
+  # 3. Servidor de Identidad Keycloak (OIDC / JWT)
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
-    command: start-dev --import-realm   # para producción: "start" (+ HTTPS/proxy)
+    container_name: keycloak-auth
+    command: start-dev --import-realm
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak-db:5432/${KC_DB_NAME}
@@ -48,17 +56,14 @@ services:
       KC_DB_PASSWORD: ${KC_DB_PASSWORD}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
-      # URL pública (la que ve el navegador). Define el "iss" de los tokens.
       KC_HOSTNAME: http://localhost:8081
-      # Hacia adentro de la red, Keycloak responde con su nombre interno (http://keycloak:8080)
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:ro
     ports:
-      - "8081:8080"        # 8080 ya lo usa swagger-ui
+      - "8081:8080"
     healthcheck:
-      # La imagen no trae curl: se consulta el puerto de gestión (9000) con bash
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"status\": \"UP\"' <&3"]
       interval: 10s
       timeout: 5s
@@ -68,33 +73,50 @@ services:
       keycloak-db:
         condition: service_healthy
     networks:
-      - kc-net      # para hablar con su base
-      - backend     # para que gateway/servicios lean el JWKS
+      - kc-net
+      - backend
 
-  # API Gateway
+  # 4. Message Broker (RabbitMQ) - Pilar del NFR-2 (Extensibilidad) y NFR-1 (Tiempo Real)
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq-broker
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # RabbitMQ Management Web UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - backend
+
+  # 5. API Gateway
   gateway:
     build: ./apigateway
+    container_name: api-gateway
     environment:
       PORT: 3000
       ENVIOS_URL: http://envios:3000
-      BFF_MOBILE_URL: http://bff-mobile:3001
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs      
     ports:
-      - "3000:3000"        # ahora este es el puerto que usa el frontend
+      - "3000:3000"
     depends_on:
       keycloak:
         condition: service_healthy
       envios:
         condition: service_started
-      # bff-mobile:
-      #   condition: service_started
     networks:
       - backend
 
-  # Microservicio de envíos
+  # 6. Microservicio de Envíos (Core Transaccional + Productor de Eventos)
   envios:
     build: ./envios
+    container_name: microservicio-envios
     environment:
       PORT: 3000
       DB_HOST: envios-db
@@ -104,29 +126,19 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     depends_on:
       envios-db:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - backend
 
-  
-  # TODO: Es necesario para nuestro proyecto?
-  # BFF para móvil
-  # bff-mobile:
-  #   build: ./bff-mobile
-  #   environment:
-  #     PORT: 3001
-  #     API_URL: http://envios:3000
-  #     KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
-  #     KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
-  #   depends_on:
-  #     - envios
-  #   networks:
-  #     - backend
-
+  # 7. Documentación Interactiva Swagger UI
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.17.14
+    container_name: swagger-ui
     environment:
       SWAGGER_JSON: /spec/openapi.yaml
     volumes:
