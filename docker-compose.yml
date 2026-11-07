@@ -64,7 +64,7 @@ services:
     ports:
       - "8081:8080"
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"status\": \"UP\"' <&3"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -101,8 +101,10 @@ services:
     environment:
       PORT: 3000
       ENVIOS_URL: http://envios:3000
+      TRACKING_URL: http://tracking:3000
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
-      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs      
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
+      KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/token      
     ports:
       - "3000:3000"
     depends_on:
@@ -110,6 +112,8 @@ services:
         condition: service_healthy
       envios:
         condition: service_started
+      tracking:
+        condition: service_healthy
     networks:
       - backend
 
@@ -126,7 +130,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
+      EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
     depends_on:
       envios-db:
         condition: service_healthy
@@ -135,7 +140,49 @@ services:
     networks:
       - backend
 
-  # 7. Documentación Interactiva Swagger UI
+  # Redis del microservicio de Tracking (estado vivo, sin persistencia)
+  tracking-redis:
+    image: redis:7-alpine
+    container_name: tracking-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
+  # Microservicio de Tracking en tiempo real (NestJS + SSE)
+  tracking:
+    build: ./tracking
+    container_name: microservicio-tracking
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://tracking-redis:6379
+      POS_TTL_S: ${TRACKING_POS_TTL_S:-30}
+      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
+      RABBITMQ_EXCHANGE: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      RABBITMQ_QUEUE: ${TRACKING_RABBITMQ_QUEUE:?Defini TRACKING_RABBITMQ_QUEUE en .env}
+    ports:
+      - "${TRACKING_PORT:-3002}:3000"
+    volumes:
+      - ./tracking/public:/app/public:ro   # editar las páginas HTML sin reconstruir la imagen
+    depends_on:
+      tracking-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/tracking/metrics').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - backend
+
+  # 9. Documentación Interactiva Swagger UI
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.17.14
     container_name: swagger-ui
