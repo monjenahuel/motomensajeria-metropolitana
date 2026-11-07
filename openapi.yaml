@@ -10,6 +10,8 @@ servers:
   - url: http://localhost:3000
     description: API Gateway (Punto de entrada unificado)
 tags:
+  - name: Autenticación
+    description: Obtención de tokens OIDC y perfil
   - name: Envíos
     description: Ciclo de vida y tracking de envíos
   - name: Sistema
@@ -27,6 +29,79 @@ paths:
       responses:
         '200':
           description: Servicio y base de datos operativos
+
+  /auth/token:
+    post:
+      tags: [Autenticación]
+      summary: Obtener token de acceso OIDC
+      description: Permite a las aplicaciones frontend autenticarse contra el Gateway mediante Resource Owner Password o Refresh Token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  example: cliente.demo
+                password:
+                  type: string
+                  example: cliente123
+                grant_type:
+                  type: string
+                  default: password
+                  enum: [password, refresh_token]
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Token obtenido exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                  token_type:
+                    type: string
+                    example: Bearer
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+
+  /auth/me:
+    get:
+      tags: [Autenticación]
+      summary: Consultar identidad del usuario actual
+      description: Retorna los datos y roles del usuario según el token Bearer provisto.
+      responses:
+        '200':
+          description: Datos del usuario autenticado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sub:
+                    type: string
+                  username:
+                    type: string
+                  email:
+                    type: string
+                  roles:
+                    type: array
+                    items:
+                      type: string
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
 
   /envios:
     get:
