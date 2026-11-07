@@ -8,15 +8,24 @@ info:
     Los eventos de dominio se publican asíncronamente vía RabbitMQ (Topic Exchange).
 servers:
   - url: http://localhost:3000
-    description: API Gateway (Punto de entrada unificado)
+    description: API Gateway (punto de entrada unificado, incluye `/envios`, `/operador`, `/cadete` y `/tracking`)
+  - url: http://localhost:3002
+    description: Microservicio de Tracking (acceso directo; SSE sin autenticación en la demo)
 tags:
   - name: Envíos
     description: Ciclo de vida y tracking de envíos
+  - name: Operador
+    description: Asignación y liberación de envíos (módulo Operador del MS de Envíos)
+  - name: Cadete
+    description: Envíos asignados al cadete autenticado y actualización de su estado (módulo Cadete del MS de Envíos)
+  - name: Tracking
+    description: Posiciones GPS en tiempo real (Redis + SSE) y consumo de eventos de RabbitMQ
   - name: Sistema
     description: Verificación de salud y diagnóstico
 
 security:
   - BearerAuth: []
+  - OAuth2: []
 
 paths:
   /health:
@@ -100,7 +109,9 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
       responses:
         '200':
           description: Detalle del envío e historial de transiciones
@@ -113,7 +124,7 @@ paths:
 
   /envios/{id}/asignar:
     patch:
-      tags: [Envíos]
+      tags: [Operador]
       summary: Asignar un envío a un cadete (Caso de uso del Operador)
       description: |
         Exclusivo de usuarios con rol `operador` o `administrador`.
@@ -123,7 +134,9 @@ paths:
           in: path
           required: true
           schema:
-            type: integer
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
       requestBody:
         required: true
         content:
@@ -154,29 +167,27 @@ paths:
 
   /envios/{id}/estado:
     patch:
-      tags: [Envíos]
-      summary: Actualizar estado de envío (Cadete)
-      description: Exclusivo del `cadete` asignado al envío. Emite el evento `envio.estado_actualizado` en RabbitMQ.
+      tags: [Cadete]
+      deprecated: true
+      summary: Actualizar estado de envío (alias de compatibilidad)
+      description: |
+        Se mantiene por compatibilidad. La ruta vigente es
+        `PATCH /cadete/envios/{id}/estado`, documentada en el módulo Cadete.
+        Exclusivo del `cadete` asignado al envío; emite `envio.estado_actualizado`.
       parameters:
         - name: id
           in: path
           required: true
           schema:
-            type: integer
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [estado]
-              properties:
-                estado:
-                  type: string
-                  enum: [EN_CAMINO, ENTREGADO, NO_ENTREGADO]
-                motivo:
-                  type: string
-                  example: Retirado en origen y en tránsito
+              $ref: '#/components/schemas/EstadoCadeteRequest'
       responses:
         '200':
           description: Estado actualizado
@@ -184,8 +195,353 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Envio'
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
         '404':
           $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          description: El envío ya está en un estado final
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /cadete/envios:
+    get:
+      tags: [Cadete]
+      summary: Listar mis envíos asignados
+      description: |
+        Devuelve los envíos cuyo `mensajero` es el username del cadete
+        autenticado. Incluye los finalizados para conservar el historial.
+        Exclusivo del rol `cadete`.
+      responses:
+        '200':
+          description: Envíos asignados al cadete
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EnvioCadete'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+
+  /cadete/envios/{id}:
+    get:
+      tags: [Cadete]
+      summary: Ver datos básicos de un envío asignado
+      description: |
+        Devuelve los datos básicos del envío. Responde 404 si no existe o si
+        está asignado a otro cadete, para no revelar su existencia.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
+      responses:
+        '200':
+          description: Datos básicos del envío
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvioCadete'
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+
+  /cadete/envios/{id}/estado:
+    patch:
+      tags: [Cadete]
+      summary: Actualizar el estado de un envío asignado
+      description: |
+        Solo el cadete asignado puede cambiar el estado. Estados permitidos:
+        `EN_CAMINO`, `ENTREGADO`, `NO_ENTREGADO`. Los envíos en estado final
+        (`ENTREGADO`, `NO_ENTREGADO`, `CANCELADO`) no admiten más cambios (409).
+        Persiste el cambio y su historial en PostgreSQL y publica
+        `envio.estado_actualizado`; Tracking libera la asignación al finalizar.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EstadoCadeteRequest'
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envio'
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          description: El envío ya está en un estado final
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /operador/asignaciones:
+    get:
+      tags: [Operador]
+      summary: Listar envíos con cadete asignado
+      description: |
+        Devuelve los envíos que tienen un cadete asignado, incluidos los que ya
+        finalizaron (el `mensajero` se conserva como historial). La fuente de
+        verdad es PostgreSQL en el MS de Envíos. Exclusivo de `operador` o
+        `administrador`.
+      responses:
+        '200':
+          description: Envíos con cadete asignado
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Envio'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+    post:
+      tags: [Operador]
+      summary: Asignar un envío a un cadete
+      description: |
+        Equivalente a `PATCH /envios/{id}/asignar`, con el `envioId` en el cuerpo.
+        Persiste la asignación en PostgreSQL y publica `envio.asignado` en RabbitMQ;
+        Tracking la recibe por el broker y actualiza su proyección en Redis.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AsignacionRequest'
+      responses:
+        '200':
+          description: Envío asignado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envio'
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          description: El envío no se encuentra en estado PENDIENTE
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /operador/asignaciones/{envioId}:
+    delete:
+      tags: [Operador]
+      summary: Liberar la asignación de un envío
+      description: |
+        Solo para envíos en estado `ASIGNADO`. Vuelve el envío a `PENDIENTE`,
+        quita el cadete asignado y publica `envio.estado_actualizado` con
+        `estadoNuevo: PENDIENTE`.
+      parameters:
+        - name: envioId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000001
+      responses:
+        '200':
+          description: Asignación liberada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Envio'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          description: El envío no se encuentra en estado ASIGNADO
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /tracking/ubicaciones:
+    post:
+      tags: [Tracking]
+      summary: Reportar la posición GPS de un cadete
+      description: |
+        Guarda la última posición con TTL de 30 s y la publica por Redis Pub/Sub
+        para todos los clientes SSE conectados. No requiere autenticación en la demo.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Ubicacion'
+      responses:
+        '202':
+          description: Posición aceptada y publicada
+        '400':
+          description: Datos inválidos (validación de NestJS)
+
+  /tracking/cadetes:
+    get:
+      tags: [Tracking]
+      summary: Última posición de todos los cadetes con señal
+      security: []
+      responses:
+        '200':
+          description: Posiciones vigentes (las expiradas no se incluyen)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Posicion'
+
+  /tracking/cadetes/{id}/posicion:
+    get:
+      tags: [Tracking]
+      summary: Última posición de un cadete
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            example: C-001
+      responses:
+        '200':
+          description: Última posición conocida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Posicion'
+        '404':
+          description: Sin posición reciente para ese cadete (expiró el TTL)
+
+  /tracking/envios/{envioId}/posicion:
+    get:
+      tags: [Tracking]
+      summary: Última posición del cadete asignado a un envío
+      security: []
+      parameters:
+        - name: envioId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: E-001
+      responses:
+        '200':
+          description: Última posición conocida del cadete asignado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Posicion'
+        '404':
+          description: Envío sin cadete asignado o posición expirada
+
+  /tracking/envios/{envioId}/stream:
+    get:
+      tags: [Tracking]
+      summary: Seguimiento en vivo de un envío (SSE, vista del cliente)
+      description: |
+        Devuelve primero la última posición conocida del cadete asignado y luego
+        las actualizaciones en vivo. Solo abre el canal de ese envío.
+
+        **No usar "Try it out" de Swagger UI:** el canal SSE queda abierto y
+        Swagger espera una respuesta completa. Probarlo con `curl -N` o desde
+        las vistas HTML del mapa en vivo.
+      security: []
+      parameters:
+        - name: envioId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: E-001
+      responses:
+        '200':
+          description: Flujo SSE con eventos `data` y `ping` cada 15 s
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                data: {"cadeteId":"cadete.demo","lat":-34.6037,"lng":-58.3816,"ts":1760000000000,"recibidoEn":1760000000100,"rumbo":90}
+
+  /tracking/stream:
+    get:
+      tags: [Tracking]
+      summary: Todas las posiciones en vivo (SSE, vista del operador)
+      description: |
+        Canal SSE con todas las posiciones de los cadetes y un `ping` cada 15 s.
+
+        **No usar "Try it out" de Swagger UI:** el canal SSE queda abierto y
+        Swagger espera una respuesta completa. Probarlo con `curl -N` o desde
+        el panel del operador en `http://localhost:3002`.
+      security: []
+      responses:
+        '200':
+          description: Flujo SSE con todas las posiciones y `ping` cada 15 s
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                data: {"cadeteId":"cadete.demo","lat":-34.6037,"lng":-58.3816,"ts":1760000000000,"recibidoEn":1760000000100,"rumbo":90}
+
+  /tracking/asignaciones:
+    get:
+      tags: [Tracking]
+      summary: Proyección de asignaciones envío ↔ cadete
+      description: |
+        Vista de solo lectura de las asignaciones que Tracking recibió por RabbitMQ.
+        El alta y la baja se gestionan en el módulo Operador del MS de Envíos
+        (`/operador/asignaciones`), no en Tracking.
+      security: []
+      responses:
+        '200':
+          description: Asignaciones vigentes según los eventos consumidos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Asignacion'
+
+  /tracking/metrics:
+    get:
+      tags: [Tracking]
+      summary: Métricas del servicio de Tracking
+      security: []
+      responses:
+        '200':
+          description: Reportes por segundo, conexiones SSE y latencias internas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricasTracking'
 
 components:
   securitySchemes:
@@ -194,15 +550,31 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Token emitido por Keycloak (`POST http://localhost:8081/realms/motomensajeria/protocol/openid-connect/token`)
+    OAuth2:
+      type: oauth2
+      description: |
+        Login directo con usuario y contraseña de Keycloak (password grant).
+
+        En Swagger UI: **Authorize → OAuth2**, ingresar el usuario y contraseña,
+        `client_id` = `motomensajeria-web` y dejar `client_secret` vacío.
+        El gateway pide el token a Keycloak y Swagger UI lo usa automáticamente.
+      flows:
+        password:
+          tokenUrl: http://localhost:3000/auth/token
+          scopes:
+            openid: OpenID Connect
+            profile: Perfil del usuario
+            email: Correo del usuario
 
   schemas:
     Envio:
       type: object
       properties:
         id:
-          type: integer
-        numero_seguimiento:
           type: string
+          format: uuid
+          description: UUID v7 generado por la base de datos
+          example: 01a1a901-5800-7000-8000-000000000001
         origen:
           type: string
         destino:
@@ -228,6 +600,62 @@ components:
           type: string
           format: date-time
           nullable: true
+
+    EnvioCadete:
+      type: object
+      description: Datos básicos de un envío asignado, tal como los ve el cadete
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 01a1a901-5800-7000-8000-000000000001
+        origen:
+          type: string
+        destino:
+          type: string
+        lat_origen:
+          type: number
+          nullable: true
+        lon_origen:
+          type: number
+          nullable: true
+        lat_destino:
+          type: number
+          nullable: true
+        lon_destino:
+          type: number
+          nullable: true
+        estado:
+          type: string
+          enum: [PENDIENTE, ASIGNADO, EN_CAMINO, ENTREGADO, NO_ENTREGADO, CANCELADO]
+        cliente:
+          type: string
+        mensajero:
+          type: string
+          nullable: true
+        fecha_asignacion:
+          type: string
+          format: date-time
+          nullable: true
+        fecha_entrega:
+          type: string
+          format: date-time
+          nullable: true
+        actualizado_en:
+          type: string
+          format: date-time
+
+    EstadoCadeteRequest:
+      type: object
+      required: [estado]
+      properties:
+        estado:
+          type: string
+          enum: [EN_CAMINO, ENTREGADO, NO_ENTREGADO]
+        motivo:
+          type: string
+          description: Motivo opcional que queda registrado en el historial
+          example: Retirado en origen y en tránsito
 
     HistorialEvento:
       type: object
@@ -257,6 +685,123 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/HistorialEvento'
+
+    Ubicacion:
+      type: object
+      required: [cadeteId, lat, lng]
+      properties:
+        cadeteId:
+          type: string
+          pattern: '^[\w-]{1,40}$'
+          example: C-001
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: -34.6037
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: -58.3816
+        ts:
+          type: integer
+          format: int64
+          description: Marca de hora del GPS en ms epoch. Si falta, se usa la hora de recepción.
+          example: 1760000000000
+        rumbo:
+          type: number
+          minimum: 0
+          maximum: 360
+          description: Rumbo en grados
+          example: 90
+
+    Posicion:
+      type: object
+      properties:
+        cadeteId:
+          type: string
+          example: C-001
+        lat:
+          type: number
+          format: double
+          example: -34.6037
+        lng:
+          type: number
+          format: double
+          example: -58.3816
+        ts:
+          type: integer
+          format: int64
+          description: Hora del GPS en ms epoch
+        recibidoEn:
+          type: integer
+          format: int64
+          description: Hora en que Tracking recibió el reporte en ms epoch
+        rumbo:
+          type: number
+          minimum: 0
+          maximum: 360
+
+    Asignacion:
+      type: object
+      description: Proyección de solo lectura que mantiene Tracking a partir de RabbitMQ
+      required: [envioId, cadeteId]
+      properties:
+        envioId:
+          type: string
+          format: uuid
+          example: 01a1a901-5800-7000-8000-000000000001
+        cadeteId:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,40}$'
+          example: cadete.demo
+
+    AsignacionRequest:
+      type: object
+      required: [envioId, mensajero]
+      properties:
+        envioId:
+          type: string
+          format: uuid
+          example: 01a1a901-5800-7000-8000-000000000001
+        mensajero:
+          type: string
+          description: Username de Keycloak del cadete asignado
+          pattern: '^[A-Za-z0-9._-]{1,40}$'
+          example: cadete.demo
+
+    MetricasTracking:
+      type: object
+      properties:
+        cadetesConPosicion:
+          type: integer
+          example: 25
+        reportesPorSegundo:
+          type: number
+          example: 5.0
+        reportesTotales:
+          type: integer
+          example: 1250
+        conexionesSse:
+          type: integer
+          example: 2
+        latenciaInternaMs:
+          type: object
+          properties:
+            p50:
+              type: number
+              nullable: true
+            p95:
+              type: number
+              nullable: true
+            p99:
+              type: number
+              nullable: true
+            muestras:
+              type: integer
 
     ProblemDetails:
       type: object

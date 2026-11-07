@@ -41,6 +41,10 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 4. **RabbitMQ (`:5672` / UI `:15672`)**: Broker de eventos con Topic Exchange `motomensajeria.events` para desacoplamiento y extensibilidad (NFR-2).
 5. **envios-db (`:5432`)**: Base de datos relacional PostgreSQL con tabla de envíos e historial de auditoría de estados (NFR-7).
 6. **Swagger UI (`:8080`)**: Documentación interactiva del contrato `openapi.yaml`.
+7. **Tracking (`:3002`)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda la última ubicación de cada cadete en Redis con TTL y la distribuye por Pub/Sub, lo que permite escalar instancias horizontalmente. Consume eventos `envio.asignado` y `envio.estado_actualizado` desde RabbitMQ para mantener su proyección de asignaciones; el alta y la baja reales las gestiona el módulo Operador del MS de Envíos.
+8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira a los 30 s si el cadete deja de reportar.
+9. **Simulador**: Genera reportes GPS de cadetes cada 5 s para la demo (25 por defecto; configurable con `SIM_CADETES`, por ejemplo `600` para la prueba de carga).
+10. **Frontend del Operador (`:5173`)**: Aplicación React (Vite) con login contra Keycloak vía Gateway. Permite listar y filtrar envíos, asignarlos a un cadete, liberar asignaciones, consultar el historial y ver el mapa en vivo.
 
 ---
 
@@ -62,6 +66,104 @@ docker compose up -d --build
 docker compose ps
 ```
 
+### Tracking en tiempo real
+El stack incluye el microservicio de Tracking y su simulador de cadetes:
+
+- **Panel del operador:** [http://localhost:3002](http://localhost:3002) — todos los cadetes en el mapa y métricas de latencia.
+- **Vista del cliente:** [http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001](http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001) — solo el seguimiento de ese envío. Requiere que el envío esté asignado a un cadete desde el módulo Operador (ver más abajo).
+- **API a través del gateway:** `http://localhost:3000/tracking/...` (por ejemplo, `http://localhost:3000/tracking/cadetes`). El gateway hace streaming de las respuestas SSE.
+- **Módulo Operador vía gateway:** `http://localhost:3000/operador/asignaciones` (requiere token con rol `operador` o `administrador`).
+- **API directa al microservicio:** `http://localhost:3002/tracking/metrics`.
+- **Puerto interno:** el contenedor `tracking` escucha en `3000` (igual que `envios`); el host lo publica en `3002` para no chocar con el API Gateway. Se puede cambiar con `TRACKING_PORT`.
+
+**Formato de los datos simulados:** el simulador usa los mismos identificadores que producción. El primer cadete es el usuario real `cadete.demo` y el resto `cadete.sim.002`, `cadete.sim.003`, etc. (usernames de Keycloak). Solo reporta posiciones (`cadeteId`, `lat`, `lng`, `rumbo`, `ts`); las asignaciones envío ↔ cadete se crean desde el módulo Operador.
+
+**Módulo Operador (asignaciones):** el MS de Envíos es el dueño de las asignaciones. Persiste en PostgreSQL y publica el evento `envio.asignado`; Tracking se limita a consumirlo.
+
+- `PATCH /envios/{id}/asignar` → caso de uso oficial del operador.
+- `GET /operador/asignaciones` → envíos con cadete asignado.
+- `POST /operador/asignaciones` → asigna con `{ "envioId": "...", "mensajero": "cadete.demo" }`.
+- `DELETE /operador/asignaciones/{envioId}` → libera una asignación en estado `ASIGNADO` y deja el envío `PENDIENTE`.
+
+**Módulo Cadete:** el cadete autenticado solo ve los envíos en los que `mensajero` coincide con su username. Los cambios de estado se persisten con su historial y publican `envio.estado_actualizado`.
+
+- `GET /cadete/envios` → envíos asignados al cadete (incluye los finalizados).
+- `GET /cadete/envios/{id}` → datos básicos de un envío propio (404 si es de otro cadete).
+- `PATCH /cadete/envios/{id}/estado` → cambia el estado a `EN_CAMINO`, `ENTREGADO` o `NO_ENTREGADO`.
+- `PATCH /envios/{id}/estado` → alias de compatibilidad de la ruta anterior.
+
+**Integración con RabbitMQ:** Tracking consume del exchange `motomensajeria.events` mediante la cola durable `tracking.envios`:
+- `envio.asignado` → guarda la asignación envío ↔ cadete en Redis.
+- `envio.estado_actualizado` con estado `PENDIENTE`, `ENTREGADO`, `NO_ENTREGADO` o `CANCELADO` → libera la asignación.
+- `envio.entregado` → también libera la asignación si se emite como evento propio.
+
+Por ahora Tracking solo consume eventos; no publica.
+
+Para la prueba de carga del escenario, levantá con `SIM_CADETES=600` (≈120 reportes/s) o cambialo en `.env`.
+
+---
+
+## Frontend del Cadete (`cadete-front`)
+
+Abrí http://localhost:5174 e ingresá con `cadete.demo / cadete123`.
+El panel permite consultar los envíos propios (`GET /cadete/envios`), buscar y filtrar
+por estado, y actualizar el estado con motivo opcional
+(`PATCH /cadete/envios/{id}/estado`). Los estados disponibles son `EN_CAMINO`,
+`ENTREGADO` y `NO_ENTREGADO`; los envíos finalizados quedan en modo consulta.
+Los datos se actualizan cada 15 segundos y el token se renueva automáticamente.
+
+```bash
+sudo docker compose up -d --build cadete-front
+```
+
+Para desarrollo local:
+
+```bash
+cd cadete-front
+npm ci
+npm run dev
+```
+
+Compose acepta `CADETE_FRONT_PORT` (5174), `APIGATEWAY_URL`
+(`http://localhost:3000`) y `CADETE_FRONT_KEYCLOAK_CLIENT_ID` (`motomensajeria-web`).
+En desarrollo, usá `VITE_API_URL` y `VITE_KEYCLOAK_CLIENT_ID` en `cadete-front/.env.local`.
+Las URL de API se incorporan durante el build. El login utiliza el password grant
+de Keycloak habilitado para la demo, con acceso exclusivo al rol `cadete`.
+
+## 🖥️ Frontend del Operador (React)
+
+Con el stack levantado, abrí [http://localhost:5173](http://localhost:5173) e ingresá con `operador.demo / operador123` (o `admin.demo / admin123`).
+
+Casos de uso cubiertos:
+
+- Login con rol `operador` o `administrador` contra Keycloak, a través de `POST /auth/token` del gateway.
+- Ver todos los envíos, con búsqueda y filtro por estado.
+- Asignar un envío `PENDIENTE` a un cadete (`PATCH /envios/{id}/asignar`), con sugerencias de cadetes que están reportando posiciones.
+- Liberar asignaciones en estado `ASIGNADO` (`DELETE /operador/asignaciones/{envioId}`).
+- Ver las asignaciones vigentes y los envíos finalizados como historial (`GET /operador/asignaciones`).
+- Consultar el detalle de un envío con su historial de estados (`GET /envios/{id}`).
+- Ver el mapa en vivo embebido desde Tracking (`:3002`).
+- Actualización automática cada 15 s y renovación automática del token.
+
+**Desarrollo local:**
+
+```bash
+cd operador-front
+npm install
+npm run dev
+```
+
+Variables de build (también configurables en `.env` para Compose):
+
+| Variable | Default | Uso |
+| :--- | :--- | :--- |
+| `VITE_API_URL` / `APIGATEWAY_URL` | `http://localhost:3000` | API Gateway |
+| `VITE_TRACKING_URL` / `OPERADOR_FRONT_TRACKING_URL` | `http://localhost:3002` | Panel de Tracking embebido |
+| `VITE_KEYCLOAK_CLIENT_ID` / `OPERADOR_FRONT_KEYCLOAK_CLIENT_ID` | `motomensajeria-web` | Cliente público de Keycloak |
+| `OPERADOR_FRONT_PORT` | `5173` | Puerto publicado por el contenedor nginx |
+
+> El login usa el password grant a través del gateway para simplificar la demo. En producción corresponde Authorization Code + PKCE.
+
 ---
 
 ## 🔑 Credenciales y Usuarios de Prueba
@@ -71,9 +173,28 @@ Todos los usuarios están precargados en Keycloak con realm `motomensajeria`:
 | Rol | Username | Password | Permisos |
 | :--- | :--- | :--- | :--- |
 | **Operador** | `operador.demo` | `operador123` | Asignar envíos a cadetes, ver todos los envíos |
-| **Cadete** | `cadete.demo` | `cadete123` | Actualizar estado de sus envíos asignados |
+| **Cadete** | `cadete.demo` | `cadete123` | Ver sus envíos asignados y actualizar su estado |
 | **Cliente** | `cliente.demo` | `cliente123` | Crear envíos, consultar únicamente sus envíos |
 | **Administrador** | `admin.demo` | `admin123` | Control total del sistema |
+
+---
+
+## 🔓 Autenticación desde Swagger UI
+
+Ya no hace falta copiar un token a mano:
+
+1. Abrí [http://localhost:8080](http://localhost:8080).
+2. Clic en **Authorize**.
+3. En **OAuth2** ingresá:
+   - **username:** por ejemplo `operador.demo`
+   - **password:** `operador123`
+   - **client_id:** `motomensajeria-web`
+   - **client_secret:** dejarlo vacío
+4. Clic en **Authorize**.
+
+Swagger UI pide el token al gateway (`POST /auth/token`), el gateway lo solicita a Keycloak por la red interna y Swagger lo aplica automáticamente a las peticiones protegidas.
+
+> El password grant está habilitado en el cliente público `motomensajeria-web` para facilitar la demo. En producción conviene usar Authorization Code + PKCE.
 
 ---
 
@@ -92,9 +213,9 @@ TOKEN_OPERADOR=$(curl -s -X POST "http://localhost:8081/realms/motomensajeria/pr
 ```
 *(En Windows PowerShell: `$TOKEN_OPERADOR = (Invoke-RestMethod -Uri "http://localhost:8081/realms/motomensajeria/protocol/openid-connect/token" -Method Post -Body @{ client_id="motomensajeria-web"; grant_type="password"; username="operador.demo"; password="operador123" }).access_token`)*
 
-### 2. Asignar el envío 1 al cadete `cadete.demo`
+### 2. Asignar el envío `01a1a901-5800-7000-8000-000000000001` al cadete `cadete.demo`
 ```bash
-curl -X PATCH http://localhost:3000/envios/1/asignar \
+curl -X PATCH http://localhost:3000/envios/01a1a901-5800-7000-8000-000000000001/asignar \
   -H "Authorization: Bearer $TOKEN_OPERADOR" \
   -H "Content-Type: application/json" \
   -d '{ "mensajero": "cadete.demo" }'
@@ -103,8 +224,7 @@ curl -X PATCH http://localhost:3000/envios/1/asignar \
 **Respuesta esperada:**
 ```json
 {
-  "id": 1,
-  "numero_seguimiento": "ENV-2026-0001",
+  "id": "01a1a901-5800-7000-8000-000000000001",
   "origen": "Av. Corrientes 1000, CABA",
   "destino": "Av. Cabildo 2000, CABA",
   "estado": "ASIGNADO",
@@ -122,9 +242,46 @@ Ingresá al panel de gestión de RabbitMQ en [http://localhost:15672](http://loc
 
 ### 4. Consultar el Detalle con Historial de Auditoría
 ```bash
-curl -H "Authorization: Bearer $TOKEN_OPERADOR" http://localhost:3000/envios/1
+curl -H "Authorization: Bearer $TOKEN_OPERADOR" http://localhost:3000/envios/01a1a901-5800-7000-8000-000000000001
 ```
 Devolverá el envío con su array `historial` detallando quién hizo la transición y en qué fecha.
+
+---
+
+## 🛵 Flujo del Cadete
+
+El cadete usa el módulo Cadete del mismo MS de Envíos. Con el envío anterior ya asignado a `cadete.demo`:
+
+### 1. Obtener Token JWT del Cadete
+```bash
+TOKEN_CADETE=$(curl -s -X POST "http://localhost:8081/realms/motomensajeria/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=motomensajeria-web" \
+  -d "grant_type=password" \
+  -d "username=cadete.demo" \
+  -d "password=cadete123" | jq -r .access_token)
+```
+
+### 2. Listar los envíos asignados
+```bash
+curl -H "Authorization: Bearer $TOKEN_CADETE" http://localhost:3000/cadete/envios
+```
+
+### 3. Ver los datos básicos de un envío
+```bash
+curl -H "Authorization: Bearer $TOKEN_CADETE" \
+  http://localhost:3000/cadete/envios/01a1a901-5800-7000-8000-000000000001
+```
+
+### 4. Cambiar el estado del envío
+```bash
+curl -X PATCH http://localhost:3000/cadete/envios/01a1a901-5800-7000-8000-000000000001/estado \
+  -H "Authorization: Bearer $TOKEN_CADETE" \
+  -H "Content-Type: application/json" \
+  -d '{ "estado": "EN_CAMINO", "motivo": "Retirado en origen y en tránsito" }'
+```
+
+Estados permitidos: `EN_CAMINO`, `ENTREGADO`, `NO_ENTREGADO`. Cada cambio queda en el historial y publica `envio.estado_actualizado`; al llegar a un estado final, Tracking libera la asignación y el envío deja de aparecer en el mapa.
 
 ---
 
