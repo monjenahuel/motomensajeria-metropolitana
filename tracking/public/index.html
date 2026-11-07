@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tracking en vivo · demo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0b1020; --panel:rgba(15,23,42,.86); --borde:rgba(148,163,184,.22); --txt:#e2e8f0; --sub:#94a3b8; --ok:#34d399; --off:#6b7280; --sel:#fbbf24; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; background:var(--bg); color:var(--txt); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  #map { position:absolute; inset:0; background:#0b1020; }
+  .panel { position:absolute; z-index:1000; background:var(--panel); border:1px solid var(--borde); border-radius:14px; backdrop-filter:blur(8px); padding:14px 16px; }
+  #hud { top:14px; left:14px; width:260px; }
+  #detalle { top:14px; right:14px; width:270px; display:none; }
+  h1 { margin:0 0 2px; font-size:15px; letter-spacing:.2px; }
+  .sub { color:var(--sub); font-size:12px; }
+  .estado { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--off); margin-right:6px; }
+  .estado.vivo { background:var(--ok); box-shadow:0 0 0 0 rgba(52,211,153,.7); animation:pulso 1.8s infinite; }
+  @keyframes pulso { 70% { box-shadow:0 0 0 8px rgba(52,211,153,0); } 100% { box-shadow:0 0 0 0 rgba(52,211,153,0); } }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; margin:12px 0 4px; }
+  .k { color:var(--sub); font-size:11px; text-transform:uppercase; letter-spacing:.5px; }
+  .v { font-size:20px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .v small { font-size:12px; font-weight:400; color:var(--sub); }
+  .leyenda { margin-top:10px; padding-top:10px; border-top:1px solid var(--borde); display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--sub); }
+  .pt { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  button { margin-top:10px; width:100%; padding:7px 10px; background:transparent; color:var(--txt); border:1px solid var(--borde); border-radius:8px; cursor:pointer; }
+  button:hover { background:rgba(148,163,184,.12); }
+  .enlace { display:block; margin-top:8px; text-align:center; padding:7px 10px; border:1px solid var(--borde); border-radius:8px; color:var(--txt); text-decoration:none; }
+  .enlace:hover { background:rgba(148,163,184,.12); }
+  label { display:flex; gap:8px; align-items:center; margin-top:10px; color:var(--sub); font-size:12px; }
+  .mapa-oscuro { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9) saturate(.5); }
+  #vacio { position:absolute; z-index:1000; left:50%; bottom:40px; transform:translateX(-50%); display:none; }
+  code { background:rgba(148,163,184,.15); padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="hud" class="panel">
+  <h1>Tracking en vivo</h1>
+  <div class="sub"><span id="estado" class="estado"></span><span id="estadoTxt">Conectando…</span></div>
+  <div class="grid">
+    <div><div class="k">Cadetes activos</div><div class="v" id="activos">0</div></div>
+    <div><div class="k">Sin señal</div><div class="v" id="sinSenal">0</div></div>
+    <div><div class="k">Reportes / s</div><div class="v" id="rps">0</div></div>
+    <div><div class="k">Conexiones SSE</div><div class="v" id="sse">–</div></div>
+    <div><div class="k">Latencia punta a punta</div><div class="v"><span id="e2e">–</span> <small>ms p95</small></div></div>
+    <div><div class="k">Latencia del servicio</div><div class="v"><span id="interna">–</span> <small>ms p95</small></div></div>
+  </div>
+  <div class="leyenda">
+    <span><i class="pt" style="background:var(--ok)"></i>En ruta</span>
+    <span><i class="pt" style="background:var(--off)"></i>Sin señal</span>
+    <span><i class="pt" style="background:var(--sel)"></i>Siguiendo</span>
+  </div>
+  <div class="sub" style="margin-top:10px">Hacé clic en un cadete para seguir su envío. Vista del cliente: <a href="/cliente.html" target="_blank" style="color:var(--sel)">/cliente.html</a></div>
+</div>
+
+<div id="detalle" class="panel">
+  <h1 id="dEnvio">Envío</h1>
+  <div class="sub" id="dCadete"></div>
+  <div class="grid">
+    <div><div class="k">Última posición</div><div class="sub" id="dPos" style="font-size:13px;color:var(--txt)">–</div></div>
+    <div><div class="k">Hace</div><div class="v"><span id="dHace">–</span> <small>s</small></div></div>
+  </div>
+  <div class="sub" id="dCanal">Canal SSE del envío: conectando…</div>
+  <label><input type="checkbox" id="centrar" checked> Mantener centrado</label>
+  <button id="dejar">Dejar de seguir</button>
+  <a id="dCliente" class="enlace" target="_blank" rel="noopener">Abrir vista del cliente ↗</a>
+</div>
+
+<div id="vacio" class="panel">Esperando cadetes… levantá el simulador: <code>docker compose up simulator</code></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const VERDE = '#34d399', GRIS = '#6b7280', AMBAR = '#fbbf24';
+const SIN_SENAL_MS = 12000;          // si no reporta en 12 s, se marca "sin señal"
+const $ = (id) => document.getElementById(id);
+
+// Zona de operación: el polígono del AMBA con un margen
+const AMBA_BOUNDS = L.latLngBounds([-35.10, -59.15], [-34.20, -58.03]);
+
+const map = L.map('map', {
+  preferCanvas: true, zoomControl: false,
+  minZoom: 9, maxZoom: 17,
+  maxBounds: AMBA_BOUNDS, maxBoundsViscosity: 1.0,   // 1.0 = no deja arrastrar fuera
+}).setView([-34.66, -58.55], 10);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 17, bounds: AMBA_BOUNDS, className: 'mapa-oscuro', attribution: '© OpenStreetMap contributors',
+}).addTo(map);
+
+const estela = L.polyline([], { color: AMBAR, weight: 3, opacity: .8 }).addTo(map);
+
+const cadetes = new Map();   // id -> { m, from, to, t0, dur, llegada }
+const envioDe = new Map();   // cadeteId -> envioId
+let seleccionado = null, canalEnvio = null, ultimaDelEnvio = null, ultimaCargaAsig = 0;
+const e2e = [], llegadas = [];
+
+const pct = (a, q) => { if (!a.length) return null; const o = [...a].sort((x, y) => x - y); return o[Math.min(o.length - 1, Math.floor(q * o.length))]; };
+
+function recibir(p, inicial = false) {
+  const ahora = performance.now(), pos = [p.lat, p.lng];
+  let c = cadetes.get(p.cadeteId);
+  if (!c) {
+    const m = L.circleMarker(pos, { radius: 5, weight: 1, color: '#052e1b', fillColor: VERDE, fillOpacity: .95 }).addTo(map);
+    m.on('click', () => seguir(p.cadeteId));
+    c = { m, from: pos, to: pos, t0: ahora, dur: 1, perf: ahora };
+    cadetes.set(p.cadeteId, c);
+  } else {
+    const cur = c.m.getLatLng();
+    c.from = [cur.lat, cur.lng]; c.to = pos; c.t0 = ahora;
+    c.dur = Math.min(8000, Math.max(800, ahora - c.perf));   // interpola durante el intervalo real entre reportes
+    c.perf = ahora;
+  }
+  c.llegada = Date.now();
+  if (!inicial) {
+    llegadas.push(Date.now());
+    const d = Date.now() - p.ts;                              // reloj del simulador = reloj del navegador (misma máquina)
+    if (d >= 0 && d < 60000) { e2e.push(d); if (e2e.length > 300) e2e.shift(); }
+  }
+  if (p.cadeteId === seleccionado) { estela.addLatLng(pos); if (estela.getLatLngs().length > 80) estela.getLatLngs().shift(); }
+  $('vacio').style.display = 'none';
+}
+
+function frame() {
+  const now = performance.now(), sel = seleccionado && cadetes.get(seleccionado);
+  for (const c of cadetes.values()) {
+    const k = Math.min(1, (now - c.t0) / c.dur);
+    c.m.setLatLng([c.from[0] + (c.to[0] - c.from[0]) * k, c.from[1] + (c.to[1] - c.from[1]) * k]);
+  }
+  if (sel && $('centrar').checked) map.setView(sel.m.getLatLng(), map.getZoom(), { animate: false });
+  requestAnimationFrame(frame);
+}
+
+function refrescarHud() {
+  let activos = 0, sin = 0;
+  for (const [id, c] of cadetes) {
+    const viva = Date.now() - c.llegada < SIN_SENAL_MS;
+    viva ? activos++ : sin++;
+    c.m.setStyle({ fillColor: id === seleccionado ? AMBAR : viva ? VERDE : GRIS, radius: id === seleccionado ? 8 : 5 });
+  }
+  $('activos').textContent = activos; $('sinSenal').textContent = sin;
+  while (llegadas.length && Date.now() - llegadas[0] > 5000) llegadas.shift();
+  $('rps').textContent = (llegadas.length / 5).toFixed(0);
+  const p95 = pct(e2e, .95); $('e2e').textContent = p95 === null ? '–' : p95;
+  if (ultimaDelEnvio) $('dHace').textContent = ((Date.now() - ultimaDelEnvio) / 1000).toFixed(0);
+  if (!cadetes.size) $('vacio').style.display = 'block';
+}
+
+async function refrescarMetricas() {
+  try {
+    const m = await (await fetch('/tracking/metrics')).json();
+    $('interna').textContent = m.latenciaInternaMs.p95 ?? '–';
+    $('sse').textContent = m.conexionesSse;
+  } catch {}
+}
+
+// ---- Seguimiento de un envío (lo que vería el cliente): canal SSE propio del envío ----
+function seguir(id) {
+  dejar();
+  const c = cadetes.get(id); if (!c) return;
+  seleccionado = id; ultimaDelEnvio = null;
+  estela.setLatLngs([c.m.getLatLng()]);
+  c.m.bringToFront();
+  const envio = envioDe.get(id);
+  const enlace = $('dCliente');
+  if (envio) { enlace.href = `/cliente.html?envio=${encodeURIComponent(envio)}`; enlace.style.display = 'block'; } else enlace.style.display = 'none';
+  $('dEnvio').textContent = envio ? `Envío ${envio}` : 'Envío sin asignar';
+  $('dCadete').textContent = `Cadete ${id}`;
+  $('dPos').textContent = '–'; $('dHace').textContent = '–';
+  $('detalle').style.display = 'block';
+  map.flyTo(c.m.getLatLng(), Math.max(map.getZoom(), 15), { duration: .8 });
+  if (!envio) { $('dCanal').textContent = 'Este cadete no tiene envío asignado.'; return; }
+  canalEnvio = new EventSource(`/tracking/envios/${envio}/stream`);
+  canalEnvio.onopen = () => { $('dCanal').textContent = `Canal SSE del envío: conectado (solo recibe a ${id})`; };
+  canalEnvio.onmessage = (e) => {
+    const p = JSON.parse(e.data);
+    $('dPos').textContent = `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`;
+    ultimaDelEnvio = Date.now();
+  };
+  canalEnvio.addEventListener('error', (e) => { if (e.data) $('dCanal').textContent = JSON.parse(e.data).mensaje; });
+}
+function dejar() {
+  if (canalEnvio) { canalEnvio.close(); canalEnvio = null; }
+  const c = seleccionado && cadetes.get(seleccionado);
+  if (c) c.m.setStyle({ fillColor: VERDE, radius: 5 });
+  seleccionado = null; estela.setLatLngs([]); $('detalle').style.display = 'none';
+}
+$('dejar').onclick = dejar;
+map.on('dragstart', () => { $('centrar').checked = false; });
+
+// ---- Arranque ----
+async function iniciar() {
+  try { for (const a of await (await fetch('/tracking/asignaciones')).json()) envioDe.set(a.cadeteId, a.envioId); } catch {}
+  try { for (const p of await (await fetch('/tracking/cadetes')).json()) recibir(p, true); } catch {}
+  const es = new EventSource('/tracking/stream');      // vista del operador: todas las posiciones
+  es.onopen = () => { $('estado').className = 'estado vivo'; $('estadoTxt').textContent = 'En vivo'; };
+  es.onerror = () => { $('estado').className = 'estado'; $('estadoTxt').textContent = 'Reconectando…'; };
+  es.onmessage = (e) => {
+    const p = JSON.parse(e.data);
+    if (!envioDe.has(p.cadeteId) && Date.now() - ultimaCargaAsig > 5000) {   // cadete nuevo: refresca asignaciones (máx. cada 5 s)
+      ultimaCargaAsig = Date.now();
+      fetch('/tracking/asignaciones').then((r) => r.json()).then((l) => l.forEach((a) => envioDe.set(a.cadeteId, a.envioId))).catch(() => {});
+    }
+    recibir(p);
+  };
+}
+iniciar();
+requestAnimationFrame(frame);
+setInterval(refrescarHud, 1000);
+setInterval(refrescarMetricas, 2000);
+refrescarMetricas();
+</script>
+</body>
+</html>
