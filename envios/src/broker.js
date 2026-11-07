@@ -3,8 +3,8 @@ import amqp from 'amqplib';
 let channel = null;
 let connection = null;
 
-const EXCHANGE_NAME = 'motomensajeria.events';
-const RABBIT_URL = process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672';
+const EXCHANGE_NAME = process.env.EXCHANGE_NAME;
+const RABBIT_URL = process.env.RABBITMQ_URL;
 
 export async function connectBroker(retries = 10, delay = 3000) {
   for (let i = 0; i < retries; i++) {
