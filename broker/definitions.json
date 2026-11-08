@@ -1,0 +1,126 @@
+{
+  "rabbit_version": "3.13.7",
+  "users": [
+    {
+      "name": "guest",
+      "password_hash": "wms6PnesrrWOh3F+OiX4COuIHBD+VPH+IV/SAYLwIlzNB2t7",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": ["administrator"]
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "guest",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "motomensajeria.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "motomensajeria.dlx",
+      "vhost": "/",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "q.auditoria",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "motomensajeria.dlx",
+        "x-dead-letter-routing-key": "dead-letter"
+      }
+    },
+    {
+      "name": "q.notificaciones",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "motomensajeria.dlx",
+        "x-dead-letter-routing-key": "dead-letter"
+      }
+    },
+    {
+      "name": "q.tracking",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "motomensajeria.dlx",
+        "x-dead-letter-routing-key": "dead-letter"
+      }
+    },
+    {
+      "name": "q.dead-letter",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "bindings": [
+    {
+      "source": "motomensajeria.events",
+      "vhost": "/",
+      "destination": "q.auditoria",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    },
+    {
+      "source": "motomensajeria.events",
+      "vhost": "/",
+      "destination": "q.notificaciones",
+      "destination_type": "queue",
+      "routing_key": "envio.*",
+      "arguments": {}
+    },
+    {
+      "source": "motomensajeria.events",
+      "vhost": "/",
+      "destination": "q.tracking",
+      "destination_type": "queue",
+      "routing_key": "envio.asignado",
+      "arguments": {}
+    },
+    {
+      "source": "motomensajeria.events",
+      "vhost": "/",
+      "destination": "q.tracking",
+      "destination_type": "queue",
+      "routing_key": "tracking.*",
+      "arguments": {}
+    },
+    {
+      "source": "motomensajeria.dlx",
+      "vhost": "/",
+      "destination": "q.dead-letter",
+      "destination_type": "queue",
+      "routing_key": "dead-letter",
+      "arguments": {}
+    }
+  ]
+}

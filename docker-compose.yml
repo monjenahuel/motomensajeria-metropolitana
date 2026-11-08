@@ -86,6 +86,9 @@ services:
     ports:
       - "5672:5672"      # AMQP
       - "15672:15672"    # RabbitMQ Management Web UI
+    volumes:
+      - ./broker/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./broker/definitions.json:/etc/rabbitmq/definitions.json:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 5s
@@ -104,7 +107,8 @@ services:
       TRACKING_URL: http://tracking:3000
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
-      KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/token      
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      KC_REALM: ${KC_REALM}      
     ports:
       - "3000:3000"
     depends_on:
@@ -130,8 +134,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
-      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
-      EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      KC_REALM: ${KC_REALM}
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     depends_on:
       envios-db:
         condition: service_healthy
@@ -234,6 +239,16 @@ services:
     ports:
       - "8080:8080"
 
+  # 8. Web del Cliente (React SPA - Stack PERN - Responsable: Ezequiel)
+  cliente-web:
+    build: ./cliente-web
+    container_name: cliente-web
+    environment:
+      VITE_API_URL: http://localhost:3000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - gateway
 
   # Frontend React del Operador (operador-front)
   # al API Gateway (:3000) y al panel de Tracking (:3002).

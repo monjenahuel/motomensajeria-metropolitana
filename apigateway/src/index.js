@@ -8,11 +8,8 @@ app.use(express.urlencoded({ extended: false }));
 
 // URL interna del microservicio de envíos (nombre del servicio en docker-compose)
 const ENVIOS_URL = process.env.ENVIOS_URL ?? 'http://envios:3000';
-// URL interna del microservicio de tracking
-const TRACKING_URL = process.env.TRACKING_URL ?? 'http://tracking:3000';
-// Endpoint de token de Keycloak (red interna de Docker)
-const KEYCLOAK_TOKEN_URL = process.env.KEYCLOAK_TOKEN_URL
-  ?? 'http://keycloak:8080/realms/motomensajeria/protocol/openid-connect/token';
+const KEYCLOAK_INTERNAL_URL = process.env.KEYCLOAK_INTERNAL_URL ?? 'http://keycloak:8080';
+const KC_REALM = process.env.KC_REALM ?? 'motomensajeria';
 
 // Roles de la aplicación (los mismos que en el realm de Keycloak)
 const ROLES_APP = ['administrador', 'operador', 'cadete', 'cliente'];
@@ -57,8 +54,58 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     service: 'api-gateway',
-    mensaje: 'API Gateway funcionando. Las rutas /envios, /operador y /cadete requieren un token Bearer.',
-    rutas: ['/health', '/auth/token', '/envios', '/operador', '/cadete', '/tracking'],
+    mensaje: 'API Gateway funcionando. Las rutas /envios requieren un token Bearer.',
+    rutas: ['/health', '/auth/token', '/auth/me', '/envios'],
+  });
+});
+
+// ---------- Rutas de Identidad / Auth ----------
+app.post('/auth/token', async (req, res) => {
+  const { username, password, grant_type = 'password', refresh_token } = req.body;
+  const tokenUrl = `${KEYCLOAK_INTERNAL_URL}/realms/${KC_REALM}/protocol/openid-connect/token`;
+
+  const params = new URLSearchParams();
+  params.append('client_id', 'motomensajeria-web');
+  params.append('grant_type', grant_type);
+
+  if (grant_type === 'password') {
+    if (!username || !password) {
+      return problem(res, 400, 'Datos incompletos', 'Se requieren username y password para autenticarse.', req.originalUrl);
+    }
+    params.append('username', username);
+    params.append('password', password);
+  } else if (grant_type === 'refresh_token') {
+    if (!refresh_token) {
+      return problem(res, 400, 'Datos incompletos', 'Se requiere refresh_token.', req.originalUrl);
+    }
+    params.append('refresh_token', refresh_token);
+  }
+
+  try {
+    const respuesta = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+
+    const data = await respuesta.json();
+    if (!respuesta.ok) {
+      return problem(res, respuesta.status, 'Error de autenticación', data.error_description || data.error || 'Credenciales inválidas.', req.originalUrl);
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('[Auth Error]', err.message);
+    problem(res, 502, 'Servicio de identidad no disponible', 'No se pudo contactar al servidor de autenticación.', req.originalUrl);
+  }
+});
+
+app.get('/auth/me', authenticate, (req, res) => {
+  res.json({
+    sub: req.user.sub,
+    username: req.user.preferred_username,
+    email: req.user.email,
+    roles: req.user.realm_access?.roles ?? [],
   });
 });
 
