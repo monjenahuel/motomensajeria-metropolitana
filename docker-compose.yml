@@ -64,7 +64,7 @@ services:
     ports:
       - "8081:8080"
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"status\": \"UP\"' <&3"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -104,6 +104,7 @@ services:
     environment:
       PORT: 3000
       ENVIOS_URL: http://envios:3000
+      TRACKING_URL: http://tracking:3000
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
       KEYCLOAK_INTERNAL_URL: http://keycloak:8080
@@ -115,6 +116,8 @@ services:
         condition: service_healthy
       envios:
         condition: service_started
+      tracking:
+        condition: service_healthy
     networks:
       - backend
 
@@ -142,7 +145,90 @@ services:
     networks:
       - backend
 
-  # 7. Documentación Interactiva Swagger UI
+  # Redis del microservicio de Tracking (estado vivo, sin persistencia)
+  tracking-redis:
+    image: redis:7-alpine
+    container_name: tracking-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
+  # Microservicio de Tracking en tiempo real (NestJS + SSE)
+  tracking:
+    build: ./tracking
+    container_name: microservicio-tracking
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://tracking-redis:6379
+      POS_TTL_S: ${TRACKING_POS_TTL_S:-30}
+      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
+      RABBITMQ_EXCHANGE: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      RABBITMQ_QUEUE: ${TRACKING_RABBITMQ_QUEUE:?Defini TRACKING_RABBITMQ_QUEUE en .env}
+    ports:
+      - "${TRACKING_PORT:-3002}:3000"
+    volumes:
+      - ./tracking/public:/app/public:ro   # editar las páginas HTML sin reconstruir la imagen
+    depends_on:
+      tracking-redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/tracking/metrics').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - backend
+
+  # 11. Frontend React del Cadete
+  cadete-front:
+    build:
+      context: ./cadete-front
+      args:
+        VITE_API_URL: ${APIGATEWAY_URL:-http://localhost:3000}
+        VITE_KEYCLOAK_CLIENT_ID: ${CADETE_FRONT_KEYCLOAK_CLIENT_ID:-motomensajeria-web}
+    container_name: cadete-front
+    ports:
+      - "${CADETE_FRONT_PORT:-5174}:80"
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost/health" ]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      gateway:
+        condition: service_started
+    networks:
+      - backend
+
+  # Simulador de cadetes (demo de tiempo real, ~N reportes cada 5 s)
+  simulator:
+    image: node:20-alpine
+    container_name: tracking-simulator
+    working_dir: /sim
+    volumes:
+      - ./simulator:/sim:ro
+    command: [ "node", "sim.js" ]
+    environment:
+      API: http://tracking:3000
+      N: ${SIM_CADETES:-25}
+      INTERVAL_MS: ${SIM_INTERVAL_MS:-5000}
+      SPEED_MS: ${SIM_SPEED_MS:-40}
+    depends_on:
+      tracking:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # 9. Documentación Interactiva Swagger UI
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.17.14
     container_name: swagger-ui
@@ -163,6 +249,30 @@ services:
       - "5173:5173"
     depends_on:
       - gateway
+
+  # Frontend React del Operador (operador-front)
+  # al API Gateway (:3000) y al panel de Tracking (:3002).
+  operador-front:
+    build:
+      context: ./operador-front
+      args:
+        VITE_API_URL: ${APIGATEWAY_URL:-http://localhost:3000}
+        VITE_TRACKING_URL: ${OPERADOR_FRONT_TRACKING_URL:-http://localhost:3002}
+        VITE_KEYCLOAK_CLIENT_ID: ${OPERADOR_FRONT_KEYCLOAK_CLIENT_ID:-motomensajeria-web}
+    container_name: operador-front
+    ports:
+      - "${OPERADOR_FRONT_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      gateway:
+        condition: service_started
+      tracking:
+        condition: service_healthy
     networks:
       - backend
 

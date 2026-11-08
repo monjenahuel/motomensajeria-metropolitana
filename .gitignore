@@ -1,3 +1,6 @@
 node_modules
 .env
 dist
+tracking/dist
+operador-front/dist
+cadete-front/dist

@@ -2,6 +2,9 @@ import express from 'express';
 import pg from 'pg';
 import { authenticate, requireRole, problem } from './auth.js';
 import { connectBroker, publishEvent } from './broker.js';
+import { crearModuloOperador } from './operador.js';
+import { crearModuloCadete } from './cadete.js';
+
 
 const app = express();
 app.use(express.json());
@@ -17,6 +20,10 @@ const pool = new pg.Pool({
 
 const ROLES_APP = ['administrador', 'operador', 'cadete', 'cliente'];
 const esStaff = (user) => user.roles.includes('administrador') || user.roles.includes('operador');
+
+// Los envíos usan UUID v7 (ver envios-db/init.sql).
+const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const esUuidV7 = (valor) => UUID_V7.test(valor);
 
 // Autorización por recurso: staff ve todo, cliente lo que creó, cadete lo asignado (NFR-6)
 function puedeVer(user, envio) {
@@ -38,6 +45,15 @@ app.get('/health', async (req, res) => {
 
 // ---------- Todo lo que sigue exige token OIDC válido (Zero Trust) ----------
 app.use(authenticate);
+
+// Módulo Operador: dueño de las asignaciones envío ↔ cadete.
+const operador = crearModuloOperador({ pool, publishEvent });
+app.use('/operador', requireRole('operador', 'administrador'), operador.router);
+
+// Módulo Cadete: envíos asignados al propio cadete y cambio de estado.
+const cadete = crearModuloCadete({ pool, publishEvent });
+app.use('/cadete', requireRole('cadete'), cadete.router);
+
 
 // Listar envíos filtrados según permisos del usuario
 app.get('/envios', requireRole(...ROLES_APP), async (req, res) => {
@@ -66,8 +82,8 @@ app.get('/envios', requireRole(...ROLES_APP), async (req, res) => {
 
 // Obtener detalle de un envío con su historial de estados
 app.get('/envios/:id', requireRole(...ROLES_APP), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return problem(res, 400, 'Id inválido', 'El id debe ser un número entero.', req.originalUrl);
+  const id = req.params.id;
+  if (!esUuidV7(id)) return problem(res, 400, 'Id inválido', 'El id debe ser un UUID v7.', req.originalUrl);
 
   try {
     const { rows } = await pool.query('SELECT * FROM envios WHERE id = $1', [id]);
@@ -100,15 +116,13 @@ app.post('/envios', requireRole('cliente', 'operador', 'administrador'), async (
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const numeroSeguimiento = `ENV-${Date.now().toString().slice(-6)}`;
 
     const insertQuery = `
-      INSERT INTO envios (numero_seguimiento, origen, destino, lat_origen, lon_origen, lat_destino, lon_destino, estado, cliente, consultas_mapas_realizadas)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDIENTE', $8, 2)
+      INSERT INTO envios (origen, destino, lat_origen, lon_origen, lat_destino, lon_destino, estado, cliente, consultas_mapas_realizadas)
+      VALUES ($1, $2, $3, $4, $5, $6, 'PENDIENTE', $7, 2)
       RETURNING *;
     `;
     const { rows } = await client.query(insertQuery, [
-      numeroSeguimiento,
       origen.trim(),
       destino.trim(),
       lat_origen ?? null,
@@ -140,147 +154,13 @@ app.post('/envios', requireRole('cliente', 'operador', 'administrador'), async (
   }
 });
 
-// Asignar un envío a un cadete: solo staff (Operador o Administrador)
-// CASO DE USO MÍNIMO OFICIAL
-app.patch('/envios/:id/asignar', requireRole('operador', 'administrador'), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return problem(res, 400, 'Id inválido', 'El id debe ser un número entero.', req.originalUrl);
+// Asignar un envío a un cadete: solo staff (Operador o Administrador).
+// CASO DE USO MÍNIMO OFICIAL. La lógica vive en el módulo Operador.
+app.patch('/envios/:id/asignar', requireRole('operador', 'administrador'), operador.asignarEnvio);
 
-  const { mensajero } = req.body ?? {};
-  if (typeof mensajero !== 'string' || mensajero.trim() === '') {
-    return problem(res, 400, 'Datos inválidos', 'Se requiere "mensajero" (username del cadete).', req.originalUrl);
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    // Bloqueo pesimista para evitar concurrencia entre operadores
-    const { rows } = await client.query('SELECT * FROM envios WHERE id = $1 FOR UPDATE', [id]);
-    if (rows.length === 0) {
-      await client.query('ROLLBACK');
-      return problem(res, 404, 'Envío no encontrado', `No existe un envío con id ${id}.`, req.originalUrl);
-    }
-
-    const envioActual = rows[0];
-    if (envioActual.estado !== 'PENDIENTE') {
-      await client.query('ROLLBACK');
-      return problem(
-        res,
-        409,
-        'Estado no asignable',
-        `El envío ${id} se encuentra en estado "${envioActual.estado}" y no puede ser asignado.`,
-        req.originalUrl
-      );
-    }
-
-    const updateQuery = `
-      UPDATE envios
-      SET estado = 'ASIGNADO',
-          mensajero = $1,
-          operador_asignador = $2,
-          fecha_asignacion = now(),
-          actualizado_en = now(),
-          consultas_mapas_realizadas = consultas_mapas_realizadas + 1
-      WHERE id = $3
-      RETURNING *;
-    `;
-    const resUpdate = await client.query(updateQuery, [mensajero.trim(), req.user.username, id]);
-    const envioAsignado = resUpdate.rows[0];
-
-    await client.query(
-      `INSERT INTO historial_estados_envio (envio_id, estado_anterior, estado_nuevo, cambiado_por, motivo)
-       VALUES ($1, 'PENDIENTE', 'ASIGNADO', $2, 'Envío asignado por operador')`,
-      [id, req.user.username]
-    );
-
-    await client.query('COMMIT');
-
-    // Publicación del evento en RabbitMQ para difusión en tiempo real (NFR-1 / NFR-2)
-    publishEvent('envio.asignado', {
-      envioId: envioAsignado.id,
-      numeroSeguimiento: envioAsignado.numero_seguimiento,
-      cliente: envioAsignado.cliente,
-      mensajero: envioAsignado.mensajero,
-      operador: envioAsignado.operador_asignador,
-      estadoAnterior: 'PENDIENTE',
-      estadoNuevo: 'ASIGNADO',
-      fechaAsignacion: envioAsignado.fecha_asignacion,
-    });
-
-    res.json(envioAsignado);
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(`Error al asignar envío ${id}:`, err);
-    problem(res, 500, 'Error interno', 'No se pudo realizar la asignación del envío.', req.originalUrl);
-  } finally {
-    client.release();
-  }
-});
-
-// Actualizar el estado: solo el cadete asignado a ese envío
-app.patch('/envios/:id/estado', requireRole('cadete'), async (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) return problem(res, 400, 'Id inválido', 'El id debe ser un número entero.', req.originalUrl);
-
-  const { estado, motivo } = req.body ?? {};
-  const estadosValidos = ['EN_CAMINO', 'ENTREGADO', 'NO_ENTREGADO'];
-  if (!estadosValidos.includes(estado)) {
-    return problem(res, 400, 'Datos inválidos', `El estado debe ser uno de: ${estadosValidos.join(', ')}.`, req.originalUrl);
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const { rows } = await client.query('SELECT * FROM envios WHERE id = $1 FOR UPDATE', [id]);
-    const envio = rows[0];
-
-    // Si no existe o pertenece a otro cadete, responde 404
-    if (!envio || envio.mensajero !== req.user.username) {
-      await client.query('ROLLBACK');
-      return problem(res, 404, 'Envío no encontrado', `No existe un envío con id ${id} asignado a tu usuario.`, req.originalUrl);
-    }
-
-    const updateQuery = `
-      UPDATE envios
-      SET estado = $1,
-          fecha_entrega = CASE WHEN $1 IN ('ENTREGADO', 'NO_ENTREGADO') THEN now() ELSE fecha_entrega END,
-          actualizado_en = now(),
-          consultas_mapas_realizadas = CASE WHEN $1 = 'EN_CAMINO' THEN consultas_mapas_realizadas + 1 ELSE consultas_mapas_realizadas END
-      WHERE id = $2
-      RETURNING *;
-    `;
-    const resUpdate = await client.query(updateQuery, [estado, id]);
-    const envioActualizado = resUpdate.rows[0];
-
-    await client.query(
-      `INSERT INTO historial_estados_envio (envio_id, estado_anterior, estado_nuevo, cambiado_por, motivo)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, envio.estado, estado, req.user.username, motivo || 'Actualización de estado por cadete']
-    );
-
-    await client.query('COMMIT');
-
-    publishEvent('envio.estado_actualizado', {
-      envioId: envioActualizado.id,
-      numeroSeguimiento: envioActualizado.numero_seguimiento,
-      cliente: envioActualizado.cliente,
-      mensajero: envioActualizado.mensajero,
-      estadoAnterior: envio.estado,
-      estadoNuevo: estado,
-      timestamp: new Date().toISOString(),
-    });
-
-    res.json(envioActualizado);
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(`Error al actualizar estado de envío ${id}:`, err);
-    problem(res, 500, 'Error interno', 'No se pudo actualizar el estado del envío.', req.originalUrl);
-  } finally {
-    client.release();
-  }
-});
+// Actualizar el estado: solo el cadete asignado a ese envío.
+// Se mantiene como alias de compatibilidad; la lógica vive en el módulo Cadete.
+app.patch('/envios/:id/estado', requireRole('cadete'), cadete.actualizarEstado);
 
 // ---------- Errores ----------
 app.use((req, res) => {
