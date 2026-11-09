@@ -246,6 +246,7 @@ services:
     container_name: cliente-web
     environment:
       VITE_API_URL: http://localhost:3000
+      VITE_TRACKING_URL: ${CLIENTE_TRACKING_URL:-http://localhost:3002}
     ports:
       - "${CLIENTE_FRONT_PORT:-5175}:5173"
     networks:

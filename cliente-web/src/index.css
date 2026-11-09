@@ -128,6 +128,36 @@ body {
   overflow-x: auto;
 }
 
+.seguimiento-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font: 600 0.875rem monospace;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.seguimiento-link:hover { color: var(--primary-hover); }
+
+.mapa-envio { padding: 0; overflow: hidden; }
+.mapa-envio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+}
+.mapa-envio-header p { overflow-wrap: anywhere; color: var(--text-muted); }
+.mapa-envio-frame {
+  display: block;
+  width: 100%;
+  height: max(500px, 65vh);
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

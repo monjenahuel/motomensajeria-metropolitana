@@ -1,7 +1,7 @@
 import React from 'react';
 import { Package, RefreshCw, Eye, UserCheck, Calendar } from 'lucide-react';
 
-export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle }) {
+export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, onSeguimiento }) {
   const getBadgeClass = (estado) => {
     switch (estado) {
       case 'PENDIENTE': return 'badge-pendiente';
@@ -65,9 +65,14 @@ export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle }
               {envios.map((envio) => (
                 <tr key={envio.id}>
                   <td>
-                    <span style={{ fontWeight: 600, fontFamily: 'monospace', color: 'var(--primary)' }}>
-                      {envio.numero_seguimiento}
-                    </span>
+                    <button
+                      type="button"
+                      className="seguimiento-link"
+                      onClick={() => onSeguimiento(envio.id)}
+                      title={`Ver seguimiento del envío ${envio.id} en el mapa`}
+                    >
+                      {envio.id}
+                    </button>
                   </td>
                   <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {envio.origen}

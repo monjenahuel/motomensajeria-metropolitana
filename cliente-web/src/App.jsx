@@ -4,6 +4,7 @@ import LoginForm from './components/LoginForm';
 import CrearEnvioForm from './components/CrearEnvioForm';
 import ListaEnvios from './components/ListaEnvios';
 import DetalleEnvioModal from './components/DetalleEnvioModal';
+import MapaEnvio from './components/MapaEnvio';
 import { login, getMe, getEnvios, crearEnvio, getEnvioDetalle } from './services/api';
 
 export default function App() {
@@ -12,6 +13,7 @@ export default function App() {
   const [envios, setEnvios] = useState([]);
   const [loading, setLoading] = useState(false);
   const [envioSeleccionado, setEnvioSeleccionado] = useState(null);
+  const [seguimientoId, setSeguimientoId] = useState(null);
 
   // Al montar o cambiar token, validar sesión
   useEffect(() => {
@@ -51,6 +53,7 @@ export default function App() {
     setUsuario(null);
     setEnvios([]);
     setEnvioSeleccionado(null);
+    setSeguimientoId(null);
   };
 
   const handleCrearEnvio = async (payload) => {
@@ -89,6 +92,8 @@ export default function App() {
       <main className="container" style={{ flex: 1, paddingBottom: '3rem' }}>
         {!token || !usuario ? (
           <LoginForm onLoginSuccess={handleLogin} />
+        ) : seguimientoId ? (
+          <MapaEnvio envioId={seguimientoId} onVolver={() => setSeguimientoId(null)} />
         ) : (
           <div>
             <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -107,6 +112,7 @@ export default function App() {
               loading={loading}
               onRefresh={handleRefrescar}
               onVerDetalle={handleVerDetalle}
+              onSeguimiento={setSeguimientoId}
             />
           </div>
         )}
