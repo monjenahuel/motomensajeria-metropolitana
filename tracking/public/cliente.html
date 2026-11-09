@@ -96,11 +96,17 @@ function seguir(envio) {
   const es = new EventSource(`/tracking/envios/${encodeURIComponent(envio)}/stream`);
   es.onmessage = (e) => recibir(JSON.parse(e.data));
   es.addEventListener('error', (e) => {
-    if (e.data) { $('msg').textContent = JSON.parse(e.data).mensaje; $('estadoTxt').textContent = 'No disponible'; cerrado = true; es.close(); }
+    if (e.data) {
+      const error = JSON.parse(e.data);
+      $('msg').textContent = error.mensaje;
+      $('estadoTxt').textContent = error.recuperable ? 'Reconectando…' : 'No disponible';
+      if (!error.recuperable) { cerrado = true; es.close(); }
+    }
     else if (!cerrado) $('estadoTxt').textContent = 'Reconectando…';
   });
 
   function recibir(p) {
+    $('msg').textContent = '';
     const pos = [p.lat, p.lng], ahora = performance.now();
     if (!marcador) {
       marcador = L.marker(pos, { icon: icono, interactive: false }).addTo(map);

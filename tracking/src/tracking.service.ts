@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Observable, Subject, filter } from 'rxjs';
 import { RedisService } from './redis.service';
+import { DatabaseService } from './database.service';
 import { UbicacionDto } from './ubicacion.dto';
 
 export interface Posicion {
@@ -26,7 +27,7 @@ export class TrackingService implements OnModuleInit {
   private ventana: number[] = [];
   conexionesSse = 0;
 
-  constructor(private readonly redis: RedisService) {}
+  constructor(private readonly redis: RedisService, private readonly db: DatabaseService) {}
 
   async onModuleInit() {
     await this.redis.sub.subscribe(CHANNEL);
@@ -76,28 +77,12 @@ export class TrackingService implements OnModuleInit {
     return cadeteId ? this.posiciones$.pipe(filter((p) => p.cadeteId === cadeteId)) : this.posiciones$.asObservable();
   }
 
-  // --- Asignaciones: proyección de solo lectura de los eventos del broker ---
-  // El alta/baja real vive en el módulo Operador del MS de Envíos (PostgreSQL + eventos).
-  async asignar(envioId: string, cadeteId: string) {
-    await this.redis.cmd.set(`asig:${envioId}`, cadeteId);
-  }
-  async desasignar(envioId: string) {
-    await this.redis.cmd.del(`asig:${envioId}`);
-  }
+  // PostgreSQL local es la proyección durable; Redis solo conserva GPS/Pub-Sub.
   async cadeteDeEnvio(envioId: string): Promise<string | null> {
-    return this.redis.cmd.get(`asig:${envioId}`);
+    return this.db.cadeteDeEnvio(envioId);
   }
   async asignaciones(): Promise<{ envioId: string; cadeteId: string }[]> {
-    const claves: string[] = [];
-    let cursor = '0';
-    do {
-      const [next, batch] = await this.redis.cmd.scan(cursor, 'MATCH', 'asig:*', 'COUNT', 1000);
-      cursor = next;
-      claves.push(...batch);
-    } while (cursor !== '0');
-    if (!claves.length) return [];
-    const valores = await this.redis.cmd.mget(claves);
-    return claves.map((k, i) => ({ envioId: k.slice(5), cadeteId: valores[i] ?? '' }));
+    return this.db.asignaciones();
   }
 
   async metricas() {

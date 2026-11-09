@@ -192,17 +192,24 @@ $('dejar').onclick = dejar;
 map.on('dragstart', () => { $('centrar').checked = false; });
 
 // ---- Arranque ----
+async function actualizarAsignaciones() {
+  const r = await fetch('/tracking/asignaciones');
+  if (!r.ok) throw new Error('No se pudieron recuperar las asignaciones');
+  const lista = await r.json();
+  envioDe.clear();
+  for (const a of lista) envioDe.set(a.cadeteId, a.envioId);
+}
 async function iniciar() {
-  try { for (const a of await (await fetch('/tracking/asignaciones')).json()) envioDe.set(a.cadeteId, a.envioId); } catch {}
+  try { await actualizarAsignaciones(); } catch {}
   try { for (const p of await (await fetch('/tracking/cadetes')).json()) recibir(p, true); } catch {}
   const es = new EventSource('/tracking/stream');      // vista del operador: todas las posiciones
-  es.onopen = () => { $('estado').className = 'estado vivo'; $('estadoTxt').textContent = 'En vivo'; };
+  es.onopen = () => { $('estado').className = 'estado vivo'; $('estadoTxt').textContent = 'En vivo'; void actualizarAsignaciones().catch(() => {}); };
   es.onerror = () => { $('estado').className = 'estado'; $('estadoTxt').textContent = 'Reconectando…'; };
   es.onmessage = (e) => {
     const p = JSON.parse(e.data);
     if (!envioDe.has(p.cadeteId) && Date.now() - ultimaCargaAsig > 5000) {   // cadete nuevo: refresca asignaciones (máx. cada 5 s)
       ultimaCargaAsig = Date.now();
-      fetch('/tracking/asignaciones').then((r) => r.json()).then((l) => l.forEach((a) => envioDe.set(a.cadeteId, a.envioId))).catch(() => {});
+      void actualizarAsignaciones().catch(() => {});
     }
     recibir(p);
   };

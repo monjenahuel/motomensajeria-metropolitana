@@ -184,6 +184,7 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 | :--- | :--- | :--- | :--- |
 | **Broker de Mensajería (RabbitMQ Topic Exchange)** | **NFR-2** (Extensibilidad) | **NFR-5** (Resiliencia) | Complejidad operativa y consistencia eventual entre módulos. |
 | **Separación de Telemetría (Memoria/Caché) vs. Envíos (Postgres)** | **NFR-1** (Tiempo Real) | **NFR-4** (Escalabilidad) | Se prescinde del almacenamiento histórico persistente de pings GPS. |
+| **Proyección de asignaciones en PostgreSQL propio de Tracking** | **NFR-5** (Resiliencia) | **NFR-2** (Extensibilidad) | Copia eventualmente consistente, reconciliada periódicamente con Envíos; Redis conserva solo GPS temporal y Pub/Sub. |
 | **Cache y Llamadas en Hitos al Servicio de Mapas** | **NFR-3** (Costo) | **NFR-1** (Tiempo Real) | Las rutas entre hitos son estimadas; no se recalculan por cada ping. |
 | **Autenticación Descentralizada con JWT (OIDC)** | **NFR-6** (Seguridad) | **NFR-4** (Escalabilidad) | Validación local sin consulta síncrona al Identity Provider en cada request. |
 | **Circuit Breaker + Fallback Heurístico para Mapas** | **NFR-5** (Disponibilidad) | **NFR-3** (Costo) | En modo degradado se brinda un ETA aproximado basado en distancia euclidiana. |

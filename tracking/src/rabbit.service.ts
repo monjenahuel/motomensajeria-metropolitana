@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import amqp, { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
-import { TrackingService } from './tracking.service';
+import { DatabaseService } from './database.service';
 
 /**
  * Configuración obligatoria: si falta una variable (o está vacía), el servicio
@@ -26,8 +26,6 @@ const ROUTING_KEYS = (process.env.RABBITMQ_ROUTING_KEYS ?? 'envio.asignado,envio
 
 interface EventoBroker {
   eventId?: string;
-  timestamp?: string;
-  eventType?: string;
   data?: Record<string, unknown>;
 }
 
@@ -35,7 +33,7 @@ interface EventoBroker {
  * Consumidor de eventos de dominio del broker.
  *
  * Por ahora solo escucha:
- *  - envio.asignado           -> guarda la relación envío ↔ cadete en Redis.
+ *  - envio.asignado           -> guarda la relación envío ↔ cadete en PostgreSQL.
  *  - envio.estado_actualizado -> libera la asignación si el envío vuelve a
  *                                PENDIENTE o finaliza (ENTREGADO/NO_ENTREGADO/CANCELADO).
  *  - envio.entregado          -> idem, por si en el futuro se emite como evento propio.
@@ -50,7 +48,7 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
   private reconnectTimer?: NodeJS.Timeout;
   private cerrando = false;
 
-  constructor(private readonly tracking: TrackingService) {}
+  constructor(private readonly db: DatabaseService) {}
 
   onModuleInit() {
     // No bloquea el arranque de Tracking si RabbitMQ tarda en estar disponible.
@@ -107,7 +105,8 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
       for (const routingKey of ROUTING_KEYS) {
         await channel.bindQueue(QUEUE, EXCHANGE, routingKey);
       }
-      await channel.prefetch(20);
+      // Evitar procesar eventos concurrentemente en este consumidor.
+      await channel.prefetch(1);
 
       await channel.consume(
         QUEUE,
@@ -135,52 +134,35 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
 
   private async procesar(msg: ConsumeMessage | null, channel: Channel): Promise<void> {
     if (!msg) return;
-
+    let evento: EventoBroker;
     try {
-      const evento = JSON.parse(msg.content.toString()) as EventoBroker;
-      const routingKey = msg.fields.routingKey || evento.eventType || '';
-      await this.aplicarEvento(routingKey, evento);
-      channel.ack(msg);
+      evento = JSON.parse(msg.content.toString()) as EventoBroker;
     } catch (err) {
-      const mensaje = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[Broker] Error procesando evento: ${mensaje}`);
-      // No reencolar indefinidamente un mensaje inválido.
+      this.logger.warn('[Broker] JSON inválido. Se descarta.');
       channel.nack(msg, false, false);
-    }
-  }
-
-  private async aplicarEvento(routingKey: string, evento: EventoBroker): Promise<void> {
-    const data = evento.data ?? {};
-    const envioId = data.envioId ?? data.id;
-
-    if (envioId === undefined || envioId === null) {
-      this.logger.warn(`[Broker] Evento ${routingKey} sin envioId. Se descarta.`);
       return;
     }
-
-    const envio = String(envioId);
-
-    if (routingKey === 'envio.asignado') {
-      const cadeteId = data.mensajero ?? data.cadeteId;
-      if (cadeteId === undefined || cadeteId === null || String(cadeteId).trim() === '') {
-        this.logger.warn(`[Broker] Evento envio.asignado sin mensajero/cadeteId (envío ${envio}).`);
-        return;
-      }
-      await this.tracking.asignar(envio, String(cadeteId));
-      this.logger.log(`[Broker] EnvioAsignado: envío ${envio} -> cadete ${cadeteId}`);
+    const routingKey = msg.fields.routingKey;
+    const data = evento?.data;
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const envioId = data?.envioId ?? data?.id;
+    const cadeteId = data?.mensajero ?? data?.cadeteId;
+    if (!['envio.asignado', 'envio.estado_actualizado', 'envio.entregado'].includes(routingKey)
+      || !evento?.eventId || !uuid.test(evento.eventId)
+      || typeof envioId !== 'string' || !uuid.test(envioId)
+      || (routingKey === 'envio.asignado' && (typeof cadeteId !== 'string' || !cadeteId.trim()))) {
+      this.logger.warn(`[Broker] Evento ${routingKey} incompleto o inválido. Se descarta.`);
+      channel.nack(msg, false, false);
       return;
     }
-
-    if (routingKey === 'envio.estado_actualizado' || routingKey === 'envio.entregado') {
-      const estado = String(data.estadoNuevo ?? data.estado ?? '').toUpperCase();
-      // PENDIENTE: el operador liberó la asignación. Los estados finales cierran el envío.
-      const libera = routingKey === 'envio.entregado'
-        || ['PENDIENTE', 'ENTREGADO', 'NO_ENTREGADO', 'CANCELADO'].includes(estado);
-
-      if (libera) {
-        await this.tracking.desasignar(envio);
-        this.logger.log(`[Broker] Envío ${envio} sin cadete (${estado || routingKey}). Asignación liberada.`);
-      }
+    try {
+      await this.db.aplicarEvento(evento.eventId, routingKey, data!);
+      channel.ack(msg); // solo después del COMMIT (incluida la deduplicación)
+    } catch (err) {
+      this.logger.error(`[Broker] Fallo de persistencia; se reintentará: ${err instanceof Error ? err.message : err}`);
+      // Un fallo temporal de PostgreSQL no debe mandar el evento a la DLQ.
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_MS));
+      try { channel.nack(msg, false, true); } catch { /* el cierre del canal lo reencola */ }
     }
   }
 }

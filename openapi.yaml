@@ -400,7 +400,7 @@ paths:
       description: |
         Equivalente a `PATCH /envios/{id}/asignar`, con el `envioId` en el cuerpo.
         Persiste la asignación en PostgreSQL y publica `envio.asignado` en RabbitMQ;
-        Tracking la recibe por el broker y actualiza su proyección en Redis.
+        Tracking la recibe por el broker y actualiza su proyección en PostgreSQL propio.
       requestBody:
         required: true
         content:

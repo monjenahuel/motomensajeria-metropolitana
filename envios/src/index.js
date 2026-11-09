@@ -4,6 +4,7 @@ import { authenticate, requireRole, problem } from './auth.js';
 import { connectBroker, publishEvent } from './broker.js';
 import { crearModuloOperador } from './operador.js';
 import { crearModuloCadete } from './cadete.js';
+import { crearModuloTrackingInterno } from './tracking-internal.js';
 
 
 const app = express();
@@ -42,6 +43,9 @@ app.get('/health', async (req, res) => {
     problem(res, 503, 'Base de datos no disponible', 'Falla de conexión a la base de datos de envíos.', req.originalUrl);
   }
 });
+
+// Sincronización interna de Tracking: accesible solo con credencial de servicio.
+app.use('/internal/tracking', crearModuloTrackingInterno(pool));
 
 // ---------- Todo lo que sigue exige token OIDC válido (Zero Trust) ----------
 app.use(authenticate);

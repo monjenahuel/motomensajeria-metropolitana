@@ -10,7 +10,7 @@ const esUuidV7 = (valor) => UUID_V7.test(valor);
  *
  * Persiste las asignaciones en PostgreSQL y publica los eventos de dominio
  * (`envio.asignado` / `envio.estado_actualizado`). Tracking solo consume esos
- * eventos para mantener su proyección en Redis; no gestiona asignaciones.
+  * eventos para mantener su proyección en PostgreSQL propio; no gestiona asignaciones.
  */
 export function crearModuloOperador({ pool, publishEvent }) {
   // Asigna un envío PENDIENTE a un cadete.

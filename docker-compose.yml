@@ -138,6 +138,7 @@ services:
       KC_REALM: ${KC_REALM}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      TRACKING_SYNC_SECRET: ${TRACKING_SYNC_SECRET:?Defini TRACKING_SYNC_SECRET en .env}
     depends_on:
       envios-db:
         condition: service_healthy
@@ -159,6 +160,24 @@ services:
     networks:
       - backend
 
+  # Base propia de Tracking: proyección durable de asignaciones (no posiciones GPS).
+  tracking-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${TRACKING_DB_NAME:?Defini TRACKING_DB_NAME en .env}
+      POSTGRES_USER: ${TRACKING_DB_USER:?Defini TRACKING_DB_USER en .env}
+      POSTGRES_PASSWORD: ${TRACKING_DB_PASSWORD:?Defini TRACKING_DB_PASSWORD en .env}
+    volumes:
+      - tracking-pgdata:/var/lib/postgresql/data
+      - ./tracking/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TRACKING_DB_USER} -d ${TRACKING_DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - backend
+
   # Microservicio de Tracking en tiempo real (NestJS + SSE)
   tracking:
     build: ./tracking
@@ -166,16 +185,25 @@ services:
     environment:
       PORT: 3000
       REDIS_URL: redis://tracking-redis:6379
+      TRACKING_DB_HOST: tracking-db
+      TRACKING_DB_PORT: 5432
+      TRACKING_DB_NAME: ${TRACKING_DB_NAME:?Defini TRACKING_DB_NAME en .env}
+      TRACKING_DB_USER: ${TRACKING_DB_USER:?Defini TRACKING_DB_USER en .env}
+      TRACKING_DB_PASSWORD: ${TRACKING_DB_PASSWORD:?Defini TRACKING_DB_PASSWORD en .env}
       POS_TTL_S: ${TRACKING_POS_TTL_S:-30}
       RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
       RABBITMQ_EXCHANGE: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
       RABBITMQ_QUEUE: ${TRACKING_RABBITMQ_QUEUE:?Defini TRACKING_RABBITMQ_QUEUE en .env}
+      ENVIOS_INTERNAL_URL: http://envios:3000
+      TRACKING_SYNC_SECRET: ${TRACKING_SYNC_SECRET:?Defini TRACKING_SYNC_SECRET en .env}
     ports:
       - "${TRACKING_PORT:-3002}:3000"
     volumes:
       - ./tracking/public:/app/public:ro   # editar las páginas HTML sin reconstruir la imagen
     depends_on:
       tracking-redis:
+        condition: service_healthy
+      tracking-db:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -283,6 +311,7 @@ services:
 volumes:
   pgdata:
   kcdata:
+  tracking-pgdata:
 
 networks:
   backend:

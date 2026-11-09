@@ -48,7 +48,13 @@ export class TrackingController {
   }
 
   private async flujoDeEnvio(envioId: string): Promise<Observable<MessageEvent>> {
-    const cadeteId = await this.tracking.cadeteDeEnvio(envioId);
+    let cadeteId: string | null;
+    try {
+      cadeteId = await this.tracking.cadeteDeEnvio(envioId);
+    } catch {
+      // El EventSource se reconecta automáticamente tras un fallo transitorio de la base local.
+      return of({ type: 'error', data: { mensaje: 'No se pudo leer la asignación. Reconectando…', recuperable: true } });
+    }
     if (!cadeteId) return of({ type: 'error', data: { mensaje: 'Envío sin cadete asignado' } });
     const ultima = await this.tracking.ultimaPosicion(cadeteId);
     const vivo = this.tracking.stream(cadeteId).pipe(map((p) => ({ data: p })));
@@ -70,7 +76,7 @@ export class TrackingController {
 
   // ---------- Proyección de asignaciones (solo lectura) ----------
   // Las asignaciones se gestionan en el módulo Operador del MS de Envíos.
-  // Tracking solo las recibe por RabbitMQ y las expone para las vistas de la demo.
+  // Tracking las proyecta desde RabbitMQ, las reconcilia y las lee de PostgreSQL propio.
   @Get('asignaciones')
   asignaciones() {
     return this.tracking.asignaciones();
