@@ -137,6 +137,7 @@ services:
       KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       KC_REALM: ${KC_REALM}
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
     depends_on:
       envios-db:
         condition: service_healthy
