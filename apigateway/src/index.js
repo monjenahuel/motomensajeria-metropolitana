@@ -169,7 +169,15 @@ async function reenviarTracking(req, res) {
   }
 }
 
-// Tracking no valida JWT en la demo: el gateway solo actúa como proxy.
+// El cadete reporta coordenadas autenticado. Nunca se acepta cadeteId del body:
+// la identidad que recibe Tracking se obtiene del token validado por el gateway.
+app.post('/tracking/ubicaciones', authenticate, requireRole('cadete'), (req, res, next) => {
+  const { lat, lng, ts, rumbo } = req.body ?? {};
+  req.body = { cadeteId: req.user.username, lat, lng, ts, rumbo };
+  next();
+}, reenviarTracking);
+
+// Las otras rutas de Tracking (mapas, métricas y SSE) permanecen públicas en la demo.
 app.use('/tracking', reenviarTracking);
 
 // ---------- Errores ----------

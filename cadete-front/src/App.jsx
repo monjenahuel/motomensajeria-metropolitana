@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { claseEstado, ESTADO_LABEL, esFinal, fecha, idCorto } from './format.js';
 import Login from './components/Login.jsx';
 import Modal from './components/Modal.jsx';
+import ReporteUbicacion from './components/ReporteUbicacion.jsx';
 
 export default function App() {
   const session = useSyncExternalStore(subscribe, getSession);
@@ -59,6 +60,7 @@ function Panel({ session }) {
         <div className="topbar-right"><strong>{session.user.username}</strong><button className="btn btn-ghost" onClick={logout}>Salir</button></div>
       </header>
       <main className="contenido">
+        <ReporteUbicacion />
         {error && <div className="alerta alerta-error" role="alert">{error}<button className="btn" onClick={cargar}>Reintentar</button></div>}
         {aviso && <p role="status">{aviso}</p>}
         <div className="stats">

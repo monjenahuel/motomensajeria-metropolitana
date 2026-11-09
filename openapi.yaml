@@ -462,20 +462,28 @@ paths:
       tags: [Tracking]
       summary: Reportar la posición GPS de un cadete
       description: |
-        Guarda la última posición con TTL de 30 s y la publica por Redis Pub/Sub
-        para todos los clientes SSE conectados. No requiere autenticación en la demo.
-      security: []
+        Por el Gateway requiere un Bearer token con rol cadete. El Gateway agrega
+        cadeteId a partir del username del token (ignora cualquier cadeteId enviado
+        en el cuerpo) y reenvía la posición a Tracking. Tracking guarda la última
+        posición con TTL configurable y la publica por Redis Pub/Sub para SSE.
+        El endpoint directo de Tracking (:3002) sigue siendo público para el simulador de la demo.
+      security:
+        - BearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Ubicacion'
+              $ref: '#/components/schemas/ReporteUbicacion'
       responses:
         '202':
           description: Posición aceptada y publicada
         '400':
           description: Datos inválidos (validación de NestJS)
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
 
   /tracking/cadetes:
     get:
@@ -761,14 +769,10 @@ components:
               items:
                 $ref: '#/components/schemas/HistorialEvento'
 
-    Ubicacion:
+    ReporteUbicacion:
       type: object
-      required: [cadeteId, lat, lng]
+      required: [lat, lng]
       properties:
-        cadeteId:
-          type: string
-          pattern: '^[\w-]{1,40}$'
-          example: C-001
         lat:
           type: number
           format: double

@@ -111,6 +111,11 @@ por estado, y actualizar el estado con motivo opcional
 (`PATCH /cadete/envios/{id}/estado`). Los estados disponibles son `EN_CAMINO`,
 `ENTREGADO` y `NO_ENTREGADO`; los envíos finalizados quedan en modo consulta.
 Los datos se actualizan cada 15 segundos y el token se renueva automáticamente.
+Mientras el panel está abierto en primer plano, solicita permiso de ubicación al navegador
+y envía automáticamente la posición real al Gateway cada 5 segundos con su token Bearer.
+El Gateway valida el rol `cadete`, obtiene el username del token y reenvía el reporte a Tracking.
+Al pasar a segundo plano o cerrar sesión deja de enviar. El navegador requiere HTTPS o
+`localhost` para acceder al GPS; en una pestaña en segundo plano no se garantiza seguimiento.
 
 ```bash
 sudo docker compose up -d --build cadete-front
