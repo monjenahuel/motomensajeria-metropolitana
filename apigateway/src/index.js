@@ -8,6 +8,7 @@ app.use(express.urlencoded({ extended: false }));
 
 // URL interna del microservicio de envíos (nombre del servicio en docker-compose)
 const ENVIOS_URL = process.env.ENVIOS_URL ?? 'http://envios:3000';
+const TRACKING_URL = process.env.TRACKING_URL ?? 'http://tracking:3000';
 const KEYCLOAK_INTERNAL_URL = process.env.KEYCLOAK_INTERNAL_URL ?? 'http://keycloak:8080';
 const KC_REALM = process.env.KC_REALM ?? 'motomensajeria';
 
@@ -21,29 +22,6 @@ app.use((req, res, next) => {
   res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
-});
-
-// ---------- Token para Swagger UI ----------
-// Swagger UI pide el token desde el navegador. Keycloak solo habilita CORS para
-// los orígenes configurados en el cliente, así que el gateway expone este proxy
-// con su propia política CORS. Solo reenvía el password grant tal cual.
-app.post('/auth/token', async (req, res) => {
-  try {
-    const body = new URLSearchParams(req.body ?? {}).toString();
-    const respuesta = await fetch(KEYCLOAK_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-
-    res.status(respuesta.status);
-    const tipo = respuesta.headers.get('content-type');
-    if (tipo) res.setHeader('Content-Type', tipo);
-    res.send(Buffer.from(await respuesta.arrayBuffer()));
-  } catch (err) {
-    console.error(err);
-    problem(res, 502, 'Servicio de identidad no disponible', 'No se pudo obtener el token desde Keycloak.', req.originalUrl);
-  }
 });
 
 // ---------- Rutas públicas ----------
