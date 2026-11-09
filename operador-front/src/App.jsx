@@ -23,6 +23,7 @@ export default function App() {
 
 function PanelOperador({ session }) {
   const [tab, setTab] = useState('envios');
+  const [envioEnMapa, setEnvioEnMapa] = useState(null);
   const [envios, setEnvios] = useState([]);
   const [asignaciones, setAsignaciones] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -93,6 +94,11 @@ function PanelOperador({ session }) {
     await cargar({ silencioso: true });
   }
 
+  function abrirSeguimiento(envioId) {
+    setEnvioEnMapa(envioId);
+    setTab('mapa');
+  }
+
   const vigentes = asignaciones.filter((e) => esVigente(e.estado)).length;
 
   return (
@@ -131,7 +137,7 @@ function PanelOperador({ session }) {
         <button type="button" className={tab === 'asignaciones' ? 'tab activo' : 'tab'} onClick={() => setTab('asignaciones')}>
           Asignaciones <span className="pill">{vigentes}</span>
         </button>
-        <button type="button" className={tab === 'mapa' ? 'tab activo' : 'tab'} onClick={() => setTab('mapa')}>
+        <button type="button" className={tab === 'mapa' ? 'tab activo' : 'tab'} onClick={() => { setEnvioEnMapa(null); setTab('mapa'); }}>
           Mapa en vivo
         </button>
       </nav>
@@ -155,6 +161,7 @@ function PanelOperador({ session }) {
             onAsignar={setAsignarA}
             onLiberar={setLiberarA}
             onDetalle={setDetalleId}
+            onSeguimiento={abrirSeguimiento}
           />
         )}
 
@@ -168,10 +175,11 @@ function PanelOperador({ session }) {
             onRefrescar={() => cargar()}
             onLiberar={setLiberarA}
             onDetalle={setDetalleId}
+            onSeguimiento={abrirSeguimiento}
           />
         )}
 
-        {tab === 'mapa' && <MapaPage />}
+        {tab === 'mapa' && <MapaPage envioId={envioEnMapa} onVerTodos={() => setEnvioEnMapa(null)} />}
       </main>
 
       {asignarA && (

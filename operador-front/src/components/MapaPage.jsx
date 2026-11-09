@@ -1,26 +1,34 @@
 import { TRACKING_URL } from '../config.js';
 
-export default function MapaPage() {
+export default function MapaPage({ envioId, onVerTodos }) {
+  const url = envioId
+    ? `${TRACKING_URL}/cliente.html?envio=${encodeURIComponent(envioId)}`
+    : TRACKING_URL;
+
   return (
     <section className="mapa-panel">
       <div className="panel-head">
         <div>
-          <h2>Mapa en vivo</h2>
-          <p>
-            Posiciones de los cadetes en tiempo real (SSE) y métricas del microservicio de Tracking.
-            El panel se sirve desde <code>{TRACKING_URL}</code>.
-          </p>
+          <h2>{envioId ? 'Seguimiento del envío' : 'Mapa en vivo'}</h2>
+          {envioId ? (
+            <p>Envío <code>{envioId}</code>. Si no tiene cadete asignado, el mapa lo indicará.</p>
+          ) : (
+            <p>Posiciones de los cadetes en tiempo real (SSE) y métricas del microservicio de Tracking.</p>
+          )}
         </div>
-        <a className="btn btn-ghost" href={TRACKING_URL} target="_blank" rel="noreferrer">
-          Abrir en pestaña ↗
-        </a>
+        <div className="panel-tools">
+          {envioId && <button type="button" className="btn btn-ghost" onClick={onVerTodos}>Ver todos los cadetes</button>}
+          <a className="btn btn-ghost" href={url} target="_blank" rel="noopener noreferrer">
+            Abrir en pestaña ↗
+          </a>
+        </div>
       </div>
 
       <div className="mapa-frame-wrap">
         <iframe
           className="mapa-frame"
-          title="Panel de tracking en vivo"
-          src={TRACKING_URL}
+          title={envioId ? `Seguimiento del envío ${envioId}` : 'Panel de tracking en vivo'}
+          src={url}
         />
       </div>
 

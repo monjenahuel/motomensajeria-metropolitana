@@ -10,6 +10,7 @@ export default function AsignacionesPage({
   onRefrescar,
   onLiberar,
   onDetalle,
+  onSeguimiento,
 }) {
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('TODOS');
@@ -94,7 +95,7 @@ export default function AsignacionesPage({
               {filtradas.map((envio) => (
                 <tr key={envio.id}>
                   <td>
-                    <button type="button" className="link-id" title={envio.id} onClick={() => onDetalle(envio.id)}>
+                    <button type="button" className="link-id" title={`Seguir envío ${envio.id} en el mapa`} onClick={() => onSeguimiento(envio.id)}>
                       {idCorto(envio.id)}
                     </button>
                   </td>
