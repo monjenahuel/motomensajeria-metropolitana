@@ -137,5 +137,6 @@ export async function accessToken() {
 }
 
 export function logout() {
+  void fetch(`${API_URL}/mapas/sesion`, { method: 'DELETE', credentials: 'include' }).catch(() => {});
   guardar(null);
 }

@@ -41,7 +41,7 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 4. **RabbitMQ (`:5672` / UI `:15672`)**: Broker de eventos con Topic Exchange `motomensajeria.events` para desacoplamiento y extensibilidad (NFR-2).
 5. **envios-db (`:5432`)**: Base de datos relacional PostgreSQL con tabla de envíos e historial de auditoría de estados (NFR-7).
 6. **Swagger UI (`:8080`)**: Documentación interactiva del contrato `openapi.yaml`.
-7. **Tracking (`:3002`)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda GPS temporal en Redis y proyección durable de asignaciones en su propio PostgreSQL. Consume eventos de RabbitMQ y reconcilia periódicamente con Envíos (fuente de verdad).
+7. **Tracking (interno)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda GPS temporal en Redis y proyección durable de asignaciones en su propio PostgreSQL. Consume eventos de RabbitMQ y reconcilia periódicamente con Envíos (fuente de verdad). El acceso externo pasa por el Gateway.
 8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira según `TRACKING_POS_TTL_S` si el cadete deja de reportar.
 9. **tracking-db (interno)**: PostgreSQL exclusivo de Tracking con volumen persistente para asignaciones e inbox de eventos.
 10. **Simulador**: Configurado para arrancar con el stack; sus reportes GPS requieren tokens de cadete válidos.
@@ -71,12 +71,11 @@ docker compose ps
 ### Tracking en tiempo real
 El stack incluye Tracking y la configuración del simulador de cadetes:
 
-- **Panel del operador:** [http://localhost:3002](http://localhost:3002) — todos los cadetes en el mapa y métricas de latencia.
-- **Vista del cliente:** [http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001](http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001) — solo el seguimiento de ese envío. Requiere que el envío esté asignado a un cadete desde el módulo Operador (ver más abajo).
-- **API a través del gateway:** `http://localhost:3000/tracking/...` (por ejemplo, `http://localhost:3000/tracking/cadetes`). El gateway hace streaming de las respuestas SSE.
+- **Panel del operador:** abrir la pestaña «Mapa en vivo» del frontend del operador. La vista global y sus consultas requieren rol `operador` o `administrador`.
+- **Vista del cliente:** abrir el seguimiento desde «Mis envíos» del frontend del cliente. El Gateway verifica que sea dueño del envío (o staff); el cadete asignado también puede consultar el seguimiento con su token. Un ID por sí solo no concede acceso.
+- **API a través del gateway:** `http://localhost:3000/tracking/...` con Bearer válido. Los streams por envío validan permisos contra Envíos y se reconectan periódicamente para volver a validarlos. Las vistas HTML están en `/mapas/` y `/mapas/cliente.html?envio=...`; el frontend obtiene primero una cookie HttpOnly de cinco minutos con `POST /mapas/sesion` (Bearer), renovada mientras el mapa está abierto. En despliegues con otros dominios, configurar frontend y Gateway bajo el mismo sitio HTTPS para las cookies SameSite.
 - **Módulo Operador vía gateway:** `http://localhost:3000/operador/asignaciones` (requiere token con rol `operador` o `administrador`).
-- **API directa al microservicio:** `http://localhost:3002/tracking/metrics`.
-- **Puerto interno:** el contenedor `tracking` escucha en `3000` (igual que `envios`); el host lo publica en `3002` para no chocar con el API Gateway. Se puede cambiar con `TRACKING_PORT`.
+- **Puerto interno:** el contenedor `tracking` escucha en `3000`, sin puerto publicado al host. No exponerlo fuera de la red interna.
 
 Tracking lee las asignaciones desde su PostgreSQL, incluso si Redis o Envíos están caídos.
 Al iniciar y cada 60 segundos reconcilia en segundo plano con Envíos usando `TRACKING_SYNC_SECRET`;
@@ -153,7 +152,7 @@ Casos de uso cubiertos:
 - Liberar asignaciones en estado `ASIGNADO` (`DELETE /operador/asignaciones/{envioId}`).
 - Ver las asignaciones vigentes y los envíos finalizados como historial (`GET /operador/asignaciones`).
 - Consultar el detalle de un envío con su historial de estados (`GET /envios/{id}`).
-- Ver el mapa en vivo embebido desde Tracking (`:3002`).
+- Ver el mapa en vivo embebido desde el Gateway (`:3000`).
 - Actualización automática cada 15 s y renovación automática del token.
 
 **Desarrollo local:**
@@ -169,7 +168,7 @@ Variables de build (también configurables en `.env` para Compose):
 | Variable | Default | Uso |
 | :--- | :--- | :--- |
 | `VITE_API_URL` / `APIGATEWAY_URL` | `http://localhost:3000` | API Gateway |
-| `VITE_TRACKING_URL` / `OPERADOR_FRONT_TRACKING_URL` | `http://localhost:3002` | Panel de Tracking embebido |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:5174,http://localhost:5175` | Orígenes permitidos para la cookie de mapas del Gateway |
 | `VITE_KEYCLOAK_CLIENT_ID` / `OPERADOR_FRONT_KEYCLOAK_CLIENT_ID` | `motomensajeria-web` | Cliente público de Keycloak |
 | `OPERADOR_FRONT_PORT` | `5173` | Puerto publicado por el contenedor nginx |
 

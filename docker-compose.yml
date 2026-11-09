@@ -105,6 +105,7 @@ services:
       PORT: 3000
       ENVIOS_URL: http://envios:3000
       TRACKING_URL: http://tracking:3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:5175}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
       KEYCLOAK_INTERNAL_URL: http://keycloak:8080
@@ -198,8 +199,7 @@ services:
       TRACKING_SYNC_SECRET: ${TRACKING_SYNC_SECRET:?Defini TRACKING_SYNC_SECRET en .env}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
-    ports:
-      - "${TRACKING_PORT:-3002}:3000"
+    # Tracking es interno: mapas y consultas salen únicamente por el Gateway.
     volumes:
       - ./tracking/public:/app/public:ro   # editar las páginas HTML sin reconstruir la imagen
     depends_on:
@@ -276,7 +276,6 @@ services:
     container_name: cliente-web
     environment:
       VITE_API_URL: http://localhost:3000
-      VITE_TRACKING_URL: ${CLIENTE_TRACKING_URL:-http://localhost:3002}
     ports:
       - "${CLIENTE_FRONT_PORT:-5175}:5173"
     networks:
@@ -285,13 +284,12 @@ services:
       - gateway
 
   # Frontend React del Operador (operador-front)
-  # al API Gateway (:3000) y al panel de Tracking (:3002).
+  # al API Gateway (:3000), también para mapas y Tracking.
   operador-front:
     build:
       context: ./operador-front
       args:
         VITE_API_URL: ${APIGATEWAY_URL:-http://localhost:3000}
-        VITE_TRACKING_URL: ${OPERADOR_FRONT_TRACKING_URL:-http://localhost:3002}
         VITE_KEYCLOAK_CLIENT_ID: ${OPERADOR_FRONT_KEYCLOAK_CLIENT_ID:-motomensajeria-web}
     container_name: operador-front
     ports:

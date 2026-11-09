@@ -5,7 +5,7 @@ import CrearEnvioForm from './components/CrearEnvioForm';
 import ListaEnvios from './components/ListaEnvios';
 import DetalleEnvioModal from './components/DetalleEnvioModal';
 import MapaEnvio from './components/MapaEnvio';
-import { login, getMe, getEnvios, crearEnvio, getEnvioDetalle } from './services/api';
+import { login, getMe, getEnvios, crearEnvio, getEnvioDetalle, cerrarSesionMapa } from './services/api';
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
@@ -48,6 +48,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    void cerrarSesionMapa().catch(() => {});
     localStorage.removeItem('token');
     setToken('');
     setUsuario(null);
@@ -93,7 +94,7 @@ export default function App() {
         {!token || !usuario ? (
           <LoginForm onLoginSuccess={handleLogin} />
         ) : seguimientoId ? (
-          <MapaEnvio envioId={seguimientoId} onVolver={() => setSeguimientoId(null)} />
+          <MapaEnvio envioId={seguimientoId} token={token} onVolver={() => setSeguimientoId(null)} />
         ) : (
           <div>
             <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>

@@ -4,6 +4,18 @@
  */
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+export const MAPAS_URL = `${API_BASE_URL.replace(/\/+$/, '')}/mapas`;
+
+export async function abrirSesionMapa(token) {
+  const res = await fetch(`${MAPAS_URL}/sesion`, {
+    method: 'POST', credentials: 'include', headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('No se pudo autorizar el mapa. Iniciá sesión nuevamente.');
+}
+
+export function cerrarSesionMapa() {
+  return fetch(`${MAPAS_URL}/sesion`, { method: 'DELETE', credentials: 'include' });
+}
 
 /**
  * Autentica un usuario solicitando un token OIDC a través del API Gateway.

@@ -20,8 +20,7 @@
   .punto.vivo { background:var(--ok); animation:pulso 1.8s infinite; }
   @keyframes pulso { 0% { box-shadow:0 0 0 0 rgba(22,163,74,.6); } 70% { box-shadow:0 0 0 9px rgba(22,163,74,0); } 100% { box-shadow:0 0 0 0 rgba(22,163,74,0); } }
   .moto-icon { font-size:28px; line-height:32px; text-align:center; filter:drop-shadow(0 2px 3px rgba(0,0,0,.45)); }
-  input, button { font:inherit; padding:9px 11px; border-radius:10px; border:1px solid var(--borde); }
-  input { width:100%; margin:10px 0 8px; }
+  button { font:inherit; padding:9px 11px; border-radius:10px; border:1px solid var(--borde); }
   button { width:100%; background:var(--txt); color:#fff; cursor:pointer; border:0; }
   #recentrar { position:absolute; z-index:1000; right:14px; bottom:96px; width:auto; padding:8px 14px; display:none; box-shadow:0 4px 14px rgba(15,23,42,.25); }
   #msg { color:#b91c1c; margin-top:8px; }
@@ -29,15 +28,6 @@
 </head>
 <body>
 <div id="map"></div>
-
-<div id="form" class="card">
-  <h1>Seguí tu envío</h1>
-  <form id="f">
-    <input id="idIn" list="envios" placeholder="UUID del envío, ej. 01a1a901-5800-…" autocomplete="off" required>
-    <datalist id="envios"></datalist>
-    <button type="submit">Ver en el mapa</button>
-  </form>
-</div>
 
 <div id="card" class="card">
   <h1>Seguimiento de tu envío</h1>
@@ -51,13 +41,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-let sinSenalMs = 30000; // valor inicial; se sincroniza con el TTL de Tracking
-fetch('/tracking/metrics')
-  .then((r) => r.json())
-  .then((m) => {
-    if (Number.isFinite(m.posicionTtlS) && m.posicionTtlS > 0) sinSenalMs = m.posicionTtlS * 1000;
-  })
-  .catch(() => {});
+let sinSenalMs = 30000; // tiempo máximo sin reportes antes de indicar "Sin señal"
 const envio = (new URLSearchParams(location.search).get('envio') || '').trim();
 
 const AMBA_BOUNDS = L.latLngBounds([-35.10, -59.15], [-34.20, -58.03]);
@@ -71,17 +55,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 17, bounds: AMBA_BOUNDS, attribution: '© OpenStreetMap contributors',
 }).addTo(map);
 
-if (!/^[A-Za-z0-9._-]{1,40}$/.test(envio)) pedirEnvio(); else seguir(envio);
-
-// ---- Sin número de envío: formulario simple ----
-async function pedirEnvio() {
-  $('form').style.display = 'block';
-  $('f').onsubmit = (e) => { e.preventDefault(); location.search = '?envio=' + encodeURIComponent($('idIn').value.trim()); };
-  try {   // sugerencias (solo para la demo)
-    const l = await (await fetch('/tracking/asignaciones')).json();
-    $('envios').innerHTML = l.map((a) => a.envioId).sort().slice(0, 100).map((id) => `<option value="${id}">`).join('');
-  } catch {}
-}
+if (/^[0-9a-f-]{36}$/i.test(envio)) seguir(envio);
 
 // ---- Seguimiento: el cliente SOLO abre el canal SSE de SU envío ----
 function seguir(envio) {
