@@ -107,6 +107,7 @@ export class TrackingService implements OnModuleInit {
     const pct = (q: number) => (ord.length ? ord[Math.min(ord.length - 1, Math.floor(q * ord.length))] : null);
     return {
       cadetesConPosicion: (await this.todas()).length,
+      posicionTtlS: POS_TTL_S,
       reportesPorSegundo: Number((this.ventana.length / 5).toFixed(1)),
       reportesTotales: this.recibidos,
       conexionesSse: this.conexionesSse,

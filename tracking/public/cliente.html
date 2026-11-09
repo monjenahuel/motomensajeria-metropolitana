@@ -51,7 +51,13 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
-const SIN_SENAL_MS = 12000;
+let sinSenalMs = 30000; // valor inicial; se sincroniza con el TTL de Tracking
+fetch('/tracking/metrics')
+  .then((r) => r.json())
+  .then((m) => {
+    if (Number.isFinite(m.posicionTtlS) && m.posicionTtlS > 0) sinSenalMs = m.posicionTtlS * 1000;
+  })
+  .catch(() => {});
 const envio = (new URLSearchParams(location.search).get('envio') || '').trim();
 
 const AMBA_BOUNDS = L.latLngBounds([-35.10, -59.15], [-34.20, -58.03]);
@@ -105,7 +111,7 @@ function seguir(envio) {
       from = [c.lat, c.lng]; to = pos; t0 = ahora;
       dur = Math.min(8000, Math.max(800, ahora - perf));   // se desliza durante el intervalo real entre reportes
     }
-    perf = ahora; ultima = Date.now();
+    perf = ahora; ultima = Number.isFinite(p.recibidoEn) ? p.recibidoEn : Date.now();
     estela.addLatLng(pos);
     if (estela.getLatLngs().length > 60) estela.getLatLngs().shift();
   }
@@ -123,7 +129,7 @@ function seguir(envio) {
 
   setInterval(() => {
     if (cerrado || !ultima) return;
-    const hace = Math.round((Date.now() - ultima) / 1000), vivo = Date.now() - ultima < SIN_SENAL_MS;
+    const hace = Math.round((Date.now() - ultima) / 1000), vivo = Date.now() - ultima < sinSenalMs;
     $('punto').className = 'punto' + (vivo ? ' vivo' : '');
     $('estadoTxt').textContent = vivo ? 'En camino' : 'Sin señal reciente';
     $('detalle').textContent = `Última actualización hace ${hace} s`;

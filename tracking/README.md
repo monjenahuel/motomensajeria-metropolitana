@@ -41,7 +41,7 @@ Variables **obligatorias** (si falta una, Tracking no arranca): `RABBITMQ_URL`, 
 
 | Método | Ruta | Qué hace |
 |---|---|---|
-| POST | `/tracking/ubicaciones` | Recibe el GPS del cadete (valida), guarda la última posición con TTL de 30 s y la publica |
+| POST | `/tracking/ubicaciones` | Recibe el GPS del cadete (valida), guarda la última posición con TTL configurable (`TRACKING_POS_TTL_S`, 30 s por defecto) y la publica |
 | GET | `/tracking/cadetes` | Última posición de todos los cadetes con señal |
 | GET | `/tracking/cadetes/:id/posicion` | Última posición de un cadete (404 si expiró) |
 | GET | `/tracking/envios/:envioId/posicion` | Ídem, resolviendo el cadete asignado al envío |
