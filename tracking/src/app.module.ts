@@ -5,9 +5,10 @@ import { TrackingController } from './tracking.controller';
 import { TrackingService } from './tracking.service';
 import { DatabaseService } from './database.service';
 import { ReconciliationService } from './reconciliation.service';
+import { CadeteAuthGuard } from './cadete-auth.guard';
 
 @Module({
   controllers: [TrackingController],
-  providers: [RedisService, DatabaseService, TrackingService, RabbitService, ReconciliationService],
+  providers: [RedisService, DatabaseService, TrackingService, RabbitService, ReconciliationService, CadeteAuthGuard],
 })
 export class AppModule {}

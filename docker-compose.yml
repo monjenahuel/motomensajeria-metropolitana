@@ -196,6 +196,8 @@ services:
       RABBITMQ_QUEUE: ${TRACKING_RABBITMQ_QUEUE:?Defini TRACKING_RABBITMQ_QUEUE en .env}
       ENVIOS_INTERNAL_URL: http://envios:3000
       TRACKING_SYNC_SECRET: ${TRACKING_SYNC_SECRET:?Defini TRACKING_SYNC_SECRET en .env}
+      KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
     ports:
       - "${TRACKING_PORT:-3002}:3000"
     volumes:

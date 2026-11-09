@@ -44,7 +44,7 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 7. **Tracking (`:3002`)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda GPS temporal en Redis y proyección durable de asignaciones en su propio PostgreSQL. Consume eventos de RabbitMQ y reconcilia periódicamente con Envíos (fuente de verdad).
 8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira según `TRACKING_POS_TTL_S` si el cadete deja de reportar.
 9. **tracking-db (interno)**: PostgreSQL exclusivo de Tracking con volumen persistente para asignaciones e inbox de eventos.
-10. **Simulador**: Genera reportes GPS de cadetes cada 5 s para la demo (25 por defecto; configurable con `SIM_CADETES`, por ejemplo `600` para la prueba de carga).
+10. **Simulador**: Configurado para arrancar con el stack; sus reportes GPS requieren tokens de cadete válidos.
 11. **Frontend del Operador (`:5173`)**: Aplicación React (Vite) con login contra Keycloak vía Gateway. Permite listar y filtrar envíos, asignarlos a un cadete, liberar asignaciones, consultar el historial y ver el mapa en vivo.
 
 ---
@@ -69,7 +69,7 @@ docker compose ps
 ```
 
 ### Tracking en tiempo real
-El stack incluye el microservicio de Tracking y su simulador de cadetes:
+El stack incluye Tracking y la configuración del simulador de cadetes:
 
 - **Panel del operador:** [http://localhost:3002](http://localhost:3002) — todos los cadetes en el mapa y métricas de latencia.
 - **Vista del cliente:** [http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001](http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001) — solo el seguimiento de ese envío. Requiere que el envío esté asignado a un cadete desde el módulo Operador (ver más abajo).
@@ -82,7 +82,7 @@ Tracking lee las asignaciones desde su PostgreSQL, incluso si Redis o Envíos es
 Al iniciar y cada 60 segundos reconcilia en segundo plano con Envíos usando `TRACKING_SYNC_SECRET`;
 no consulta Envíos por cada mapa. Si se perdió un evento, la recuperación es eventual.
 
-**Formato de los datos simulados:** el simulador usa los mismos identificadores que producción. El primer cadete es el usuario real `cadete.demo` y el resto `cadete.sim.002`, `cadete.sim.003`, etc. (usernames de Keycloak). Solo reporta posiciones (`cadeteId`, `lat`, `lng`, `rumbo`, `ts`); las asignaciones envío ↔ cadete se crean desde el módulo Operador.
+**Simulador:** Compose intenta arrancarlo con el stack, pero Tracking rechazará sus reportes GPS sin un token válido de cadete. En este checkout falta `simulator/sim.js`; para usarlo hay que incorporar el script y adaptarlo al flujo autenticado.
 
 **Módulo Operador (asignaciones):** el MS de Envíos es el dueño de las asignaciones. Persiste en PostgreSQL y publica el evento `envio.asignado`; Tracking lo consume para actualizar su proyección y la reconcilia periódicamente con Envíos.
 
@@ -105,7 +105,7 @@ no consulta Envíos por cada mapa. Si se perdió un evento, la recuperación es 
 
 Por ahora Tracking solo consume eventos; no publica.
 
-Para la prueba de carga del escenario, levantá con `SIM_CADETES=600` (≈120 reportes/s) o cambialo en `.env`.
+Para pruebas de carga, usar clientes con tokens de cadete válidos. Cambiar `SIM_CADETES` por sí solo no habilita el reporte sin autenticación.
 
 ---
 

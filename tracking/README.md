@@ -50,12 +50,13 @@ Variables en `.env`: `TRACKING_DB_NAME`, `TRACKING_DB_USER`, `TRACKING_DB_PASSWO
 | GET | `/tracking/asignaciones` | Lee la proyección local PostgreSQL. El alta/baja oficial se hace en Envíos |
 | GET | `/tracking/metrics` | Reportes/s, conexiones SSE y latencia interna (p50/p95/p99) |
 
-Ejemplo de reporte directo para la demo (el navegador del cadete utiliza el Gateway con token Bearer):
+Ejemplo de reporte directo (Tracking verifica el JWT y usa el username del token; `cadeteId` en el body se ignora):
 
 ```bash
 curl -X POST localhost:3002/tracking/ubicaciones \
+  -H "Authorization: Bearer $TOKEN_CADETE" \
   -H 'content-type: application/json' \
-  -d '{"cadeteId":"cadete.demo","lat":-34.60,"lng":-58.40}'
+  -d '{"lat":-34.60,"lng":-58.40}'
 ```
 
 ## Decisiones
@@ -69,6 +70,7 @@ curl -X POST localhost:3002/tracking/ubicaciones \
 ## Demo vs. producción
 
 - Las asignaciones se gestionan en el módulo Operador del MS de Envíos (`PATCH /envios/{id}/asignar` o `/operador/asignaciones`). Tracking consume los eventos resultantes (`envio.asignado` / `envio.estado_actualizado`) y reconcilia su proyección periódicamente.
-- Las vistas de seguimiento de la demo no autentican al cliente ni verifican que sea dueño del envío; el reporte GPS a través del Gateway sí exige un token de cadete.
+- Las vistas de seguimiento de la demo no autentican al cliente ni verifican que sea dueño del envío; el reporte GPS exige un token de cadete validado tanto por el Gateway como por Tracking.
+- El simulador está configurado para arrancar con Compose, pero sus reportes sin JWT serán rechazados. Para hacerlo funcionar necesita tokens de cadete válidos y el archivo `simulator/sim.js`.
 - Sin buffer offline en la app del cadete, sin límites de tasa y sin réplica de Redis.
-- El simulador acelera la velocidad (`SPEED_MS=40`) para que el movimiento se note en el mapa.
+- El simulador debe adaptar su publicación de GPS al flujo autenticado para generar posiciones visibles.

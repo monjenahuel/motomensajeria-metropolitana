@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, MessageEvent, NotFoundException, Param, Post, Sse } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, MessageEvent, NotFoundException, Param, Post, Sse, UseGuards } from '@nestjs/common';
 import { Observable, concat, from, interval, map, merge, of, switchMap } from 'rxjs';
 import { TrackingService } from './tracking.service';
 import { UbicacionDto } from './ubicacion.dto';
+import { CadeteAuthGuard } from './cadete-auth.guard';
 
 @Controller('tracking')
 export class TrackingController {
@@ -9,6 +10,7 @@ export class TrackingController {
 
   // ---------- Entrada: app del cadete ----------
   @Post('ubicaciones')
+  @UseGuards(CadeteAuthGuard)
   @HttpCode(202)
   async reportar(@Body() dto: UbicacionDto) {
     await this.tracking.registrar(dto);
