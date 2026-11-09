@@ -8,6 +8,8 @@ app.use(express.urlencoded({ extended: false }));
 
 // URL interna del microservicio de envíos (nombre del servicio en docker-compose)
 const ENVIOS_URL = process.env.ENVIOS_URL ?? 'http://envios:3000';
+// URL interna del microservicio de notificaciones
+const NOTIFICACIONES_URL = process.env.NOTIFICACIONES_URL ?? 'http://notificaciones:3000';
 // URL interna del microservicio de tracking
 const TRACKING_URL = process.env.TRACKING_URL ?? 'http://tracking:3000';
 // Endpoint de token de Keycloak (red interna de Docker)
@@ -58,14 +60,14 @@ app.get('/', (req, res) => {
   res.json({
     service: 'api-gateway',
     mensaje: 'API Gateway funcionando. Las rutas /envios, /operador y /cadete requieren un token Bearer.',
-    rutas: ['/health', '/auth/token', '/envios', '/operador', '/cadete', '/tracking'],
+    rutas: ['/health', '/auth/token', '/envios', '/operador', '/cadete', '/notificaciones', '/tracking'],
   });
 });
 
 // ---------- Reenvío a envíos ----------
 // Reenvía método, body y token al microservicio. La autorización fina por rol (y por dueño del envío)
 // la vuelve a aplicar el propio microservicio.
-async function reenviar(req, res) {
+async function reenviarA(baseUrl, req, res) {
   try {
     const init = { method: req.method, headers: { authorization: req.headers.authorization } };
     const tieneBody = !['GET', 'HEAD'].includes(req.method) && req.body && Object.keys(req.body).length > 0;
@@ -73,7 +75,7 @@ async function reenviar(req, res) {
       init.headers['content-type'] = 'application/json';
       init.body = JSON.stringify(req.body);
     }
-    const respuesta = await fetch(`${ENVIOS_URL}${req.originalUrl}`, init);
+    const respuesta = await fetch(`${baseUrl}${req.originalUrl}`, init);
     res.status(respuesta.status);
     const tipo = respuesta.headers.get('content-type');
     if (tipo) res.type(tipo);
@@ -86,8 +88,14 @@ async function reenviar(req, res) {
   }
 }
 
+const reenviar = (req, res) => reenviarA(ENVIOS_URL, req, res);
+const reenviarNotificaciones = (req, res) => reenviarA(NOTIFICACIONES_URL, req, res);
+
 // El gateway rechaza lo obvio: sin token válido (401) o sin ningún rol de la aplicación (403).
 app.use('/envios', authenticate, requireRole(...ROLES_APP), reenviar);
+
+// Avisos al cliente (microservicio de notificaciones): el cliente ve los suyos, el staff todos.
+app.use('/notificaciones', authenticate, requireRole('cliente', 'operador', 'administrador'), reenviarNotificaciones);
 
 // Módulo Operador: también vive en el MS de Envíos y exige rol operador/administrador.
 app.use('/operador', authenticate, requireRole('operador', 'administrador'), reenviar);

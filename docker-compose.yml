@@ -102,6 +102,7 @@ services:
       PORT: 3000
       ENVIOS_URL: http://envios:3000
       TRACKING_URL: http://tracking:3000
+      NOTIFICACIONES_URL: http://notificaciones:3000
       KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
       KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
       KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/token      
@@ -114,6 +115,8 @@ services:
         condition: service_started
       tracking:
         condition: service_healthy
+      notificaciones:
+        condition: service_started
     networks:
       - backend
 
@@ -258,6 +261,54 @@ services:
         condition: service_started
       tracking:
         condition: service_healthy
+    networks:
+      - backend
+
+  # Sistema externo simulado: el servicio de mapas que cobra por consulta
+  mock-mapas:
+    build: ./mock-mapas
+    container_name: mock-mapas
+    environment:
+      PORT: 4000
+      LATENCIA_MS: 150
+    ports:
+      - "4000:4000"        # para mostrar /stats (contador de consultas) y /admin/falla en la demo
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # Adaptador de mapas: ubica direcciones, estima tiempos y cachea
+  mapas:
+    build: ./mapas
+    container_name: microservicio-mapas
+    environment:
+      PORT: 3000
+      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
+      EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      MAPAS_URL: http://mock-mapas:4000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mock-mapas:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - backend
+
+  # Avisos al cliente
+  notificaciones:
+    build: ./notificaciones
+    container_name: microservicio-notificaciones
+    environment:
+      PORT: 3000
+      RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
+      EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
+      KEYCLOAK_ISSUER: http://localhost:8081/realms/${KC_REALM}
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/certs
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - backend
 
