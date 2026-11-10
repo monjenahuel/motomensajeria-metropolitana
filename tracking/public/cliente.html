@@ -33,7 +33,7 @@
   <h1>Seguimiento de tu envío</h1>
   <div class="envio" id="envioId"></div>
   <div class="estado"><span class="punto" id="punto"></span><span id="estadoTxt">Conectando…</span></div>
-  <div class="sub" id="detalle" style="margin-top:4px">Esperando la primera posición…</div>
+  <div class="sub" id="detalle" style="margin-top:4px"></div>
   <div id="msg"></div>
 </div>
 <button id="recentrar">Recentrar</button>
@@ -57,27 +57,71 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 if (/^[0-9a-f-]{36}$/i.test(envio)) seguir(envio);
 
-// ---- Seguimiento: el cliente SOLO abre el canal SSE de SU envío ----
+// El estado viene de Envíos; la señal GPS solo indica si hay posición reciente.
 function seguir(envio) {
   $('card').style.display = 'block';
-  $('envioId').textContent = envio;
+  $('envioId').textContent = envio.slice(-8);
+  $('envioId').title = envio;
   document.title = `Envío ${envio}`;
 
   const icono = L.divIcon({ className: 'moto-icon', html: '🛵', iconSize: [32, 32], iconAnchor: [16, 16] });
   const estela = L.polyline([], { color: '#2563eb', weight: 4, opacity: .7 }).addTo(map);
-  let marcador = null, from, to, t0 = 0, dur = 1, perf = 0, ultima = 0, centrado = true, cerrado = false;
+  let marcador = null, from, to, t0 = 0, dur = 1, perf = 0, ultima = 0, centrado = true, es = null, estado = null;
 
-  const es = new EventSource(`/tracking/envios/${encodeURIComponent(envio)}/stream`);
-  es.onmessage = (e) => recibir(JSON.parse(e.data));
-  es.addEventListener('error', (e) => {
-    if (e.data) {
-      const error = JSON.parse(e.data);
-      $('msg').textContent = error.mensaje;
-      $('estadoTxt').textContent = error.recuperable ? 'Reconectando…' : 'No disponible';
-      if (!error.recuperable) { cerrado = true; es.close(); }
+  function detener() {
+    if (es) { es.close(); es = null; }
+    if (marcador) { map.removeLayer(marcador); marcador = null; }
+    estela.setLatLngs([]);
+    ultima = 0;
+    $('punto').className = 'punto';
+  }
+
+  function mostrarEstado(nuevo) {
+    if (['ENTREGADO', 'NO_ENTREGADO', 'CANCELADO'].includes(estado) && nuevo !== estado) return;
+    estado = nuevo;
+    if (estado !== 'EN_CAMINO') detener();
+    const textos = {
+      PENDIENTE: 'El envío aún no está en camino',
+      ASIGNADO: 'El envío aún no está en camino',
+      ENTREGADO: 'El envío fue entregado',
+      NO_ENTREGADO: 'No se pudo entregar el envío',
+      CANCELADO: 'El envío fue cancelado',
+    };
+    $('estadoTxt').textContent = textos[estado] ?? (estado === 'EN_CAMINO' ? 'En camino' : 'Estado no disponible');
+    if (estado !== 'EN_CAMINO') $('detalle').textContent = '';
+    if (estado === 'EN_CAMINO' && !es) abrirStream();
+  }
+
+  async function consultarEstado() {
+    if (['ENTREGADO', 'NO_ENTREGADO', 'CANCELADO'].includes(estado)) return;
+    try {
+      const res = await fetch(`/mapas/envios/${encodeURIComponent(envio)}/estado`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('No se pudo consultar el estado del envío.');
+      mostrarEstado((await res.json()).estado);
+      $('msg').textContent = '';
+    } catch (err) {
+      if (['ENTREGADO', 'NO_ENTREGADO', 'CANCELADO'].includes(estado)) return;
+      detener(); // sin estado verificable, no mostrar una ubicación anterior
+      $('estadoTxt').textContent = 'Estado no disponible';
+      $('detalle').textContent = '';
+      $('msg').textContent = err.message;
     }
-    else if (!cerrado) $('estadoTxt').textContent = 'Reconectando…';
-  });
+  }
+
+  function abrirStream() {
+    es = new EventSource(`/tracking/envios/${encodeURIComponent(envio)}/stream`);
+    es.onmessage = (e) => { if (estado === 'EN_CAMINO') recibir(JSON.parse(e.data)); };
+    es.addEventListener('estado_final', (e) => mostrarEstado(JSON.parse(e.data).estado));
+    es.addEventListener('error', (e) => {
+      if (e.data) {
+        const error = JSON.parse(e.data);
+        $('msg').textContent = error.mensaje;
+      }
+      void consultarEstado();
+    });
+  }
+
+  void consultarEstado();
 
   function recibir(p) {
     $('msg').textContent = '';
@@ -108,11 +152,10 @@ function seguir(envio) {
   requestAnimationFrame(frame);
 
   setInterval(() => {
-    if (cerrado || !ultima) return;
+    if (estado !== 'EN_CAMINO' || !ultima) return;
     const hace = Math.round((Date.now() - ultima) / 1000), vivo = Date.now() - ultima < sinSenalMs;
     $('punto').className = 'punto' + (vivo ? ' vivo' : '');
-    $('estadoTxt').textContent = vivo ? 'En camino' : 'Sin señal reciente';
-    $('detalle').textContent = `Última actualización hace ${hace} s`;
+    $('detalle').textContent = `${vivo ? 'Señal reciente' : 'Sin señal reciente'} · Última posición hace ${hace} s`;
   }, 500);
 
   map.on('dragstart', () => { centrado = false; $('recentrar').style.display = 'block'; });

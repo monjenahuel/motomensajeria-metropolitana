@@ -28,8 +28,8 @@ Tracking se conecta al broker y consume del exchange `motomensajeria.events` con
 | Evento | Acción |
 |---|---|
 | `envio.asignado` | Guarda `envioId` → `mensajero` en PostgreSQL de Tracking |
-| `envio.estado_actualizado` (`PENDIENTE`, `ENTREGADO`, `NO_ENTREGADO`, `CANCELADO`) | Elimina la asignación del envío |
-| `envio.entregado` | Elimina la asignación del envío |
+| `envio.estado_actualizado` (`PENDIENTE`, `ENTREGADO`, `NO_ENTREGADO`, `CANCELADO`) | Elimina la asignación y avisa por Redis a los SSE del envío para cerrarlos |
+| `envio.entregado` | Elimina la asignación y cierra los SSE del envío |
 
 La fuente de verdad de las asignaciones es Envíos. Tracking mantiene una **proyección durable propia** en `tracking-db`, con una tabla inbox `eventos_procesados` para deduplicar `eventId`. Confirma los eventos de RabbitMQ **después** del commit; si PostgreSQL falla, reencola el evento. Al iniciar y cada 60 segundos, una tarea en segundo plano consulta el snapshot de Envíos mediante `TRACKING_SYNC_SECRET` y reconcilia la proyección para cubrir eventos perdidos. Si Envíos no está disponible, conserva la proyección local y vuelve a intentarlo. **Abrir mapas y consultar asignaciones no llama a Envíos**; la corrección tras un evento perdido es eventual (hasta la siguiente reconciliación). Sin outbox en Envíos, no hay garantía de publicación atómica con su transacción.
 

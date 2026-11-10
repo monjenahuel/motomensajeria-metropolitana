@@ -6,10 +6,14 @@ process.env.RABBITMQ_URL = 'amqp://localhost';
 process.env.RABBITMQ_EXCHANGE = 'test.events';
 process.env.RABBITMQ_QUEUE = 'test.tracking';
 process.env.RABBITMQ_RECONNECT_MS = '1';
+process.env.KEYCLOAK_ISSUER = 'http://issuer.test';
+process.env.KEYCLOAK_JWKS_URI = 'http://issuer.test/jwks';
 const { DatabaseService } = require('../dist/database.service.js');
 const { TrackingService } = require('../dist/tracking.service.js');
 const { ReconciliationService } = require('../dist/reconciliation.service.js');
 const { RabbitService } = require('../dist/rabbit.service.js');
+const { TrackingController } = require('../dist/tracking.controller.js');
+const { Subject } = require('rxjs');
 
 const id = '01a1a901-5800-7000-8000-000000000001';
 const eventId = '9ed155b4-1722-4ea9-b745-ed7d12a40a82';
@@ -99,7 +103,8 @@ test('snapshot de Envíos reconstruye y corrige la proyección sin cambiar el es
 
 test('RabbitMQ confirma tras persistir y reencola un fallo transitorio', async () => {
   const { db, state } = base();
-  const rabbit = new RabbitService(db);
+  const publicados = [];
+  const rabbit = new RabbitService(db, { publicarFinDeEnvio: async (envioId, estado) => publicados.push({ envioId, estado }) });
   const calls = [];
   const channel = {
     ack: () => calls.push('ack'),
@@ -118,4 +123,37 @@ test('RabbitMQ confirma tras persistir y reencola un fallo transitorio', async (
   assert.deepEqual(calls, ['requeue', 'ack', 'ack']);
   await rabbit.procesar({ fields: { routingKey: 'envio.asignado' }, content: Buffer.from('{}') }, channel);
   assert.equal(calls.at(-1), 'discard');
+  const final = { fields: { routingKey: 'envio.estado_actualizado' }, content: Buffer.from(JSON.stringify({
+    eventId: '9ed155b4-1722-4ea9-b745-ed7d12a40a86', data: { envioId: id, estadoNuevo: 'NO_ENTREGADO' },
+  })) };
+  await rabbit.procesar(final, channel);
+  assert.deepEqual(publicados, [{ envioId: id, estado: 'NO_ENTREGADO' }]);
+  assert.equal(await db.cadeteDeEnvio(id), null);
+  await rabbit.procesar(final, channel);
+  assert.equal(publicados.length, 2, 'una redelivery también debe notificar el cierre');
+});
+
+test('el evento final cierra el SSE del envío, no el stream general de cadetes', async () => {
+  const posiciones = new Subject();
+  const estados = new Subject();
+  const tracking = {
+    conexionesSse: 0,
+    cadeteDeEnvio: async () => 'cadete.demo',
+    ultimaPosicion: async () => null,
+    stream: (cadeteId) => cadeteId ? posiciones.asObservable() : posiciones.asObservable(),
+    finDeEnvio: () => estados.asObservable(),
+  };
+  const controller = new TrackingController(tracking);
+  const eventos = [];
+  let terminado = false;
+  const sub = controller.streamEnvio(id).subscribe({ next: (e) => eventos.push(e), complete: () => { terminado = true; } });
+  // Esperar a que se resuelva la asignación asíncrona y se instalen los listeners.
+  await new Promise((resolve) => setImmediate(resolve));
+  posiciones.next({ cadeteId: 'cadete.demo', lat: -34.6, lng: -58.4 });
+  estados.next({ envioId: id, estado: 'ENTREGADO' });
+  posiciones.next({ cadeteId: 'cadete.demo', lat: -34.7, lng: -58.5 });
+  assert.equal(terminado, true);
+  assert.deepEqual(eventos.map((e) => e.type ?? 'posicion'), ['posicion', 'estado_final']);
+  assert.deepEqual(eventos[1].data, { estado: 'ENTREGADO' });
+  sub.unsubscribe();
 });

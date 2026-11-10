@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import amqp, { Channel, ChannelModel, ConsumeMessage } from 'amqplib';
 import { DatabaseService } from './database.service';
+import { TrackingService } from './tracking.service';
 
 /**
  * Configuración obligatoria: si falta una variable (o está vacía), el servicio
@@ -48,7 +49,7 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
   private reconnectTimer?: NodeJS.Timeout;
   private cerrando = false;
 
-  constructor(private readonly db: DatabaseService) {}
+  constructor(private readonly db: DatabaseService, private readonly tracking: TrackingService) {}
 
   onModuleInit() {
     // No bloquea el arranque de Tracking si RabbitMQ tarda en estar disponible.
@@ -157,6 +158,11 @@ export class RabbitService implements OnModuleInit, OnModuleDestroy {
     }
     try {
       await this.db.aplicarEvento(evento.eventId, routingKey, data!);
+      const estado = String(data!.estadoNuevo ?? data!.estado ?? (routingKey === 'envio.entregado' ? 'ENTREGADO' : '')).toUpperCase();
+      if (routingKey !== 'envio.asignado' && ['PENDIENTE', 'ENTREGADO', 'NO_ENTREGADO', 'CANCELADO'].includes(estado)) {
+        // También se publica en redeliveries: el commit pudo ocurrir antes de fallar Redis.
+        await this.tracking.publicarFinDeEnvio(envioId as string, estado);
+      }
       channel.ack(msg); // solo después del COMMIT (incluida la deduplicación)
     } catch (err) {
       this.logger.error(`[Broker] Fallo de persistencia; se reintentará: ${err instanceof Error ? err.message : err}`);

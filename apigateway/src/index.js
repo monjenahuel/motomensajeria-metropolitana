@@ -217,11 +217,19 @@ async function autorizarEnvio(req, res, next) {
     });
     if (respuesta.status === 404) return problem(res, 404, 'Envío no encontrado', 'No existe un envío accesible con ese id.', req.originalUrl);
     if (!respuesta.ok) return problem(res, 502, 'Servicio no disponible', 'No se pudo verificar el acceso al envío.', req.originalUrl);
+    req.envio = await respuesta.json();
     next();
   } catch (err) {
     console.error('Error autorizando seguimiento:', err);
     problem(res, 502, 'Servicio no disponible', 'No se pudo verificar el acceso al envío.', req.originalUrl);
   }
+}
+
+function exigirEnvioEnCamino(req, res, next) {
+  if (req.envio.estado !== 'EN_CAMINO') {
+    return problem(res, 409, 'Seguimiento no disponible', 'El envío no está en camino.', req.originalUrl);
+  }
+  next();
 }
 
 const staff = requireRole('operador', 'administrador');
@@ -243,7 +251,10 @@ async function servirMapa(archivo, req, res) {
 
 app.get('/mapas/cliente.html', autenticarMapa, roles, autorizarEnvio, (req, res) => servirMapa('cliente.html', req, res));
 app.get('/mapas/', autenticarMapa, staff, (req, res) => servirMapa('index.html', req, res));
-app.get('/mapas/tracking/envios/:envioId/stream', autenticarMapa, roles, autorizarEnvio, reenviarTracking);
+app.get('/mapas/envios/:envioId/estado', autenticarMapa, roles, autorizarEnvio, (req, res) => {
+  res.set('Cache-Control', 'no-store').json({ estado: req.envio.estado });
+});
+app.get('/mapas/tracking/envios/:envioId/stream', autenticarMapa, roles, autorizarEnvio, exigirEnvioEnCamino, reenviarTracking);
 app.get('/mapas/tracking/cadetes', autenticarMapa, staff, reenviarTracking);
 app.get('/mapas/tracking/asignaciones', autenticarMapa, staff, reenviarTracking);
 app.get('/mapas/tracking/stream', autenticarMapa, staff, reenviarTracking);
@@ -257,8 +268,8 @@ app.post('/tracking/ubicaciones', authenticate, requireRole('cadete'), (req, res
   next();
 }, reenviarTracking);
 
-app.get('/tracking/envios/:envioId/posicion', authenticate, roles, autorizarEnvio, reenviarTracking);
-app.get('/tracking/envios/:envioId/stream', authenticate, roles, autorizarEnvio, reenviarTracking);
+app.get('/tracking/envios/:envioId/posicion', authenticate, roles, autorizarEnvio, exigirEnvioEnCamino, reenviarTracking);
+app.get('/tracking/envios/:envioId/stream', authenticate, roles, autorizarEnvio, exigirEnvioEnCamino, reenviarTracking);
 app.get('/tracking/cadetes/:id/posicion', authenticate, roles, (req, res, next) => {
   if (req.user.roles.includes('operador') || req.user.roles.includes('administrador') ||
       (req.user.roles.includes('cadete') && req.params.id === req.user.username)) return next();

@@ -20,6 +20,7 @@ test('mapas y seguimiento requieren identidad y autorización por envío', async
     .setIssuedAt().setExpirationTime('5m').sign(privateKey);
   const id = '019927d4-1234-7123-8123-0123456789ab';
   let cadeteAsignado = true;
+  let estado = 'EN_CAMINO';
   const jwks = await servidor((req, res) => {
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ keys: [jwk] }));
   });
@@ -29,7 +30,8 @@ test('mapas y seguimiento requieren identidad y autorización por envío', async
       req.headers.authorization === `Bearer ${t.tokenStaff}` ? 'staff' : 'otro';
     res.statusCode = req.url === `/envios/${id}` &&
       (usuario === 'cliente' || usuario === 'staff' || (usuario === 'cadete' && cadeteAsignado)) ? 200 : 404;
-    res.end('{}');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ estado }));
   });
   const tracking = await servidor((req, res) => {
     res.setHeader('Content-Type', req.url.endsWith('/stream') ? 'text/event-stream' : 'text/html');
@@ -67,6 +69,10 @@ test('mapas y seguimiento requieren identidad y autorización por envío', async
   assert.equal((await pedir(`/tracking/envios/${id}/posicion`, await jwt('ajeno', 'cliente'))).status, 404);
   assert.equal((await pedir(`/tracking/envios/${id}/posicion`, t.tokenCliente)).status, 200);
   assert.equal((await pedir(`/tracking/envios/${id}/posicion`, t.tokenCadete)).status, 200);
+  estado = 'ASIGNADO';
+  assert.equal((await pedir(`/tracking/envios/${id}/posicion`, t.tokenCliente)).status, 409);
+  assert.equal((await pedir(`/tracking/envios/${id}/stream`, t.tokenCliente)).status, 409);
+  estado = 'EN_CAMINO';
   cadeteAsignado = false;
   assert.equal((await pedir(`/tracking/envios/${id}/posicion`, t.tokenCadete)).status, 404);
   assert.equal((await pedir('/tracking/stream', t.tokenStaff)).status, 200);
@@ -80,6 +86,14 @@ test('mapas y seguimiento requieren identidad y autorización por envío', async
   assert.match(await mapa.text(), /\/mapas\/tracking\/envios/);
   assert.equal((await pedir(`/mapas/tracking/envios/${id}/stream`, null, cookie)).status, 200);
   assert.equal((await pedir(`/mapas/tracking/envios/${id}/stream?origen=prueba`, null, cookie)).status, 200);
+  assert.deepEqual(await (await pedir(`/mapas/envios/${id}/estado`, null, cookie)).json(), { estado: 'EN_CAMINO' });
+  estado = 'ENTREGADO';
+  assert.deepEqual(await (await pedir(`/mapas/envios/${id}/estado`, null, cookie)).json(), { estado: 'ENTREGADO' });
+  assert.equal((await pedir(`/mapas/tracking/envios/${id}/stream`, null, cookie)).status, 409);
+  estado = 'NO_ENTREGADO';
+  assert.deepEqual(await (await pedir(`/mapas/envios/${id}/estado`, null, cookie)).json(), { estado: 'NO_ENTREGADO' });
+  assert.equal((await pedir(`/mapas/envios/${id}/estado`, null, 'mapa_token=%INVALIDO')).status, 401);
+  assert.equal((await pedir(`/mapas/envios/${id}/estado`, null, `mapa_token=${await jwt('ajeno', 'cliente')}`)).status, 404);
   assert.equal((await pedir('/mapas/tracking/stream', null, cookie)).status, 403);
   assert.equal((await pedir('/mapas/', null, cookie)).status, 403);
   const staffSesion = await fetch(`${base}/mapas/sesion`, { method: 'POST', headers: { Authorization: `Bearer ${t.tokenStaff}` } });

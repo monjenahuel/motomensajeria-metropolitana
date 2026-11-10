@@ -1,5 +1,6 @@
 import React from 'react';
 import { Package, RefreshCw, Eye, UserCheck, Calendar } from 'lucide-react';
+import { idCorto } from '../format';
 
 export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, onSeguimiento }) {
   const getBadgeClass = (estado) => {
@@ -65,14 +66,20 @@ export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, 
               {envios.map((envio) => (
                 <tr key={envio.id}>
                   <td>
-                    <button
-                      type="button"
-                      className="seguimiento-link"
-                      onClick={() => onSeguimiento(envio.id)}
-                      title={`Ver seguimiento del envío ${envio.id} en el mapa`}
-                    >
-                      {envio.id}
-                    </button>
+                    {envio.estado === 'EN_CAMINO' ? (
+                      <button
+                        type="button"
+                        className="seguimiento-link"
+                        onClick={() => onSeguimiento(envio.id)}
+                        title={`Ver seguimiento del envío ${envio.id} en el mapa`}
+                      >
+                        {idCorto(envio.id)}
+                      </button>
+                    ) : (
+                      <span style={{ fontFamily: 'monospace' }} title={`${envio.id} · El mapa solo está disponible cuando el envío está en camino`}>
+                        {idCorto(envio.id)}
+                      </span>
+                    )}
                   </td>
                   <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {envio.origen}

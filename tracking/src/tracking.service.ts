@@ -14,12 +14,14 @@ export interface Posicion {
 }
 
 const CHANNEL = 'tracking:posiciones';
+const ESTADOS_CHANNEL = 'tracking:estados';
 const POS_TTL_S = Number(process.env.POS_TTL_S ?? 30); // sin reportes -> la posición expira sola
 
 @Injectable()
 export class TrackingService implements OnModuleInit {
   /** Fan-out interno: cada posición que llega por Redis Pub/Sub se reparte a los clientes SSE de ESTA instancia. */
   private readonly posiciones$ = new Subject<Posicion>();
+  private readonly estados$ = new Subject<{ envioId: string; estado: string }>();
 
   // --- métricas (para verificar los NFR con números) ---
   private latencias: number[] = [];
@@ -30,8 +32,13 @@ export class TrackingService implements OnModuleInit {
   constructor(private readonly redis: RedisService, private readonly db: DatabaseService) {}
 
   async onModuleInit() {
-    await this.redis.sub.subscribe(CHANNEL);
-    this.redis.sub.on('message', (_canal, msg) => {
+    await this.redis.sub.subscribe(CHANNEL, ESTADOS_CHANNEL);
+    this.redis.sub.on('message', (canal, msg) => {
+      if (canal === ESTADOS_CHANNEL) {
+        this.estados$.next(JSON.parse(msg));
+        return;
+      }
+      if (canal !== CHANNEL) return;
       const p: Posicion = JSON.parse(msg);
       // latencia interna: recepción del POST -> entrega al fan-out SSE
       this.latencias.push(Date.now() - p.recibidoEn);
@@ -75,6 +82,14 @@ export class TrackingService implements OnModuleInit {
   /** Flujo en vivo de todas las posiciones (vista del operador) o de un solo cadete (seguimiento de un envío). */
   stream(cadeteId?: string): Observable<Posicion> {
     return cadeteId ? this.posiciones$.pipe(filter((p) => p.cadeteId === cadeteId)) : this.posiciones$.asObservable();
+  }
+
+  finDeEnvio(envioId: string): Observable<{ envioId: string; estado: string }> {
+    return this.estados$.pipe(filter((e) => e.envioId === envioId));
+  }
+
+  async publicarFinDeEnvio(envioId: string, estado: string): Promise<void> {
+    await this.redis.cmd.publish(ESTADOS_CHANNEL, JSON.stringify({ envioId, estado }));
   }
 
   // PostgreSQL local es la proyección durable; Redis solo conserva GPS/Pub-Sub.

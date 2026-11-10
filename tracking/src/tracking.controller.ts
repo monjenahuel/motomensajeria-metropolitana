@@ -60,7 +60,16 @@ export class TrackingController {
     if (!cadeteId) return of({ type: 'error', data: { mensaje: 'Envío sin cadete asignado' } });
     const ultima = await this.tracking.ultimaPosicion(cadeteId);
     const vivo = this.tracking.stream(cadeteId).pipe(map((p) => ({ data: p })));
-    return this.conLatido(ultima ? concat(of({ data: ultima }), vivo) : vivo);
+    const posiciones = this.conLatido(ultima ? concat(of({ data: ultima }), vivo) : vivo);
+    return new Observable<MessageEvent>((sub) => {
+      // Suscribir primero la finalización para no enviar más GPS tras recibirla.
+      const fin = this.tracking.finDeEnvio(envioId).subscribe(({ estado }) => {
+        sub.next({ type: 'estado_final', data: { estado } });
+        sub.complete();
+      });
+      const datos = sub.closed ? null : posiciones.subscribe(sub);
+      return () => { fin.unsubscribe(); datos?.unsubscribe(); };
+    });
   }
 
   private conLatido(source: Observable<MessageEvent>): Observable<MessageEvent> {

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { abrirSesionMapa, MAPAS_URL } from '../services/api';
+import { idCorto } from '../format';
 
 export default function MapaEnvio({ envioId, token, onVolver }) {
   const [listo, setListo] = useState(false);
@@ -22,7 +23,7 @@ export default function MapaEnvio({ envioId, token, onVolver }) {
       <div className="mapa-envio-header">
         <div>
           <h2>Seguimiento del envío</h2>
-          <p>{envioId}</p>
+          <p title={envioId}>{idCorto(envioId)}</p>
         </div>
         <button type="button" className="btn btn-outline" onClick={onVolver}>
           Volver a mis envíos
