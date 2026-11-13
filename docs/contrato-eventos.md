@@ -24,7 +24,7 @@ El broker entrega *al menos una vez*: los consumidores ignoran los `eventId` que
 | `envio.creado` | Envíos | Mapas, Notificaciones |
 | `envio.asignado` | Envíos | Tracking, Mapas, Notificaciones |
 | `envio.estado_actualizado` | Envíos | Tracking, Mapas, Notificaciones |
-| `envio.geocodificado` | **Mapas** | (Envíos, opcional) |
+| `envio.geocodificado` | **Mapas** | Envíos |
 | `envio.eta_estimado` | **Mapas** | Notificaciones (Envíos, opcional) |
 | `envio.geocodificacion_fallida` | **Mapas** | Notificaciones (Envíos, opcional) |
 
@@ -35,9 +35,9 @@ Estados de Envíos: `PENDIENTE`, `ASIGNADO`, `EN_CAMINO`, `ENTREGADO`, `NO_ENTRE
 **`envio.creado`**: `data` es la fila completa del envío: `id` (UUID), `origen` y `destino` (texto),
 `lat_origen`, `lon_origen`, `lat_destino`, `lon_destino` (pueden ser `null`), `estado`, `cliente`, etc.
 
-**`envio.asignado`**: `{ envioId, cliente, mensajero, operador, estadoAnterior, estadoNuevo, fechaAsignacion }`
+**`envio.asignado`**: `{ envioId, cliente, mensajero, origen, destino, operador, estadoAnterior, estadoNuevo, fechaAsignacion }`
 
-**`envio.estado_actualizado`**: `{ envioId, cliente, mensajero, estadoAnterior, estadoNuevo, timestamp }`
+**`envio.estado_actualizado`**: `{ envioId, cliente, mensajero, origen, destino, estadoAnterior, estadoNuevo, timestamp }`
 (también cuando el operador libera una asignación: `ASIGNADO` → `PENDIENTE`).
 
 ### Los que publica Mapas
@@ -78,6 +78,7 @@ Se publica al asignar (ruta + 10 min de retiro) y al pasar a `EN_CAMINO`. `orige
 | Cola | Servicio |
 |---|---|
 | `mapas.envios` | Mapas |
+| `envios.geocodificacion` | Envíos |
 | `q.notificaciones` | Notificaciones |
 | `tracking.envios` | Tracking |
 
@@ -86,15 +87,14 @@ Se publica al asignar (ruta + 10 min de retiro) y al pasar a `EN_CAMINO`. `orige
 - **Sin orden entre colas distintas.** El aviso de ETA puede llegar antes que el de "asignado".
 - **Una cola existe desde que su servicio arranca por primera vez.** Los eventos publicados antes se pierden para ese servicio:
   levanten el compose completo antes de probar el apagado de un servicio.
-- **Mapas recuerda los envíos en memoria.** Si se reinicia, no puede estimar el ETA de un envío ya creado, salvo que el
-  evento traiga `origen` y `destino` (ver mejoras opcionales).
+- **Mapas recuerda los envíos en memoria.** Si se reinicia, recupera el ETA de un envío ya creado porque
+  `envio.asignado` y `envio.estado_actualizado` incluyen `origen` y `destino` (texto).
 - Si un consumidor falla procesando un mensaje, se reintenta una vez y después se descarta con un log.
 
 ## Mejoras opcionales para Envíos (ninguna bloquea nada)
 
-1. **Consumir `envio.geocodificado`** y guardar `lat_*`/`lon_*`: hoy quedan en `null` salvo que el cliente las mande,
-   y el panel del operador no puede dibujar el envío.
-2. **Consumir `envio.eta_estimado`** y guardar el ETA para mostrarlo en el panel.
-3. **Incluir `origen` y `destino` (texto) en `envio.asignado` y `envio.estado_actualizado`:** Mapas recupera el ETA
-   aunque se haya reiniciado.
-4. **Incluir `motivo` en `envio.estado_actualizado`** (sobre todo en `NO_ENTREGADO`): el aviso al cliente lo menciona.
+1. **Consumir `envio.eta_estimado`** y guardar el ETA para mostrarlo en el panel.
+2. **Incluir `motivo` en `envio.estado_actualizado`** (sobre todo en `NO_ENTREGADO`): el aviso al cliente lo menciona.
+
+Ya implementado: Envíos consume `envio.geocodificado` y guarda `lat_*`/`lon_*`, e incluye `origen` y `destino`
+en `envio.asignado` y `envio.estado_actualizado`.

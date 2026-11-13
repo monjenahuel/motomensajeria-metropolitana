@@ -1,9 +1,10 @@
 import express from 'express';
 import pg from 'pg';
 import { authenticate, requireRole, problem } from './auth.js';
-import { connectBroker, publishEvent } from './broker.js';
+import { connectBroker, publishEvent, suscribir } from './broker.js';
 import { crearModuloOperador } from './operador.js';
 import { crearModuloCadete } from './cadete.js';
+import { crearConsumidorGeocodificacion } from './geocodificacion.js';
 
 
 const app = express();
@@ -176,4 +177,8 @@ const port = Number(process.env.PORT ?? 3000);
 app.listen(port, async () => {
   console.log(`[Microservicio Envíos] Escuchando en el puerto ${port}`);
   await connectBroker();
+
+  // Mapas geocodifica las direcciones y publica el resultado: acá se guarda en PostgreSQL.
+  const geocodificacion = crearConsumidorGeocodificacion({ pool, suscribir });
+  await geocodificacion.iniciar();
 });

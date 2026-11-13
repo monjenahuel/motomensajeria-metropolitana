@@ -1,4 +1,4 @@
-// Prueba de punta a punta de Mapas y Notificaciones SIN RabbitMQ ni Keycloak, con los eventos tal como los publica
+// Prueba de punta a punta de Mapas, Notificaciones y el consumidor de Envíos SIN RabbitMQ ni Keycloak, con los eventos tal como los publica
 // hoy el servicio de Envíos del repo (UUID, "cliente", "mensajero", estados en MAYÚSCULA, NUMERIC como texto).
 // Un bus en memoria reemplaza al broker y se inyecta una autenticación falsa.
 //
@@ -230,6 +230,46 @@ console.log('\nAPI HTTP de Notificaciones (autenticación simulada)');
   assert.ok(soloID1.length >= 6 && soloID1.every((n) => n.envioId === ID1));
   paso('filtros ?desde (polling) y ?envioId; parámetro inválido -> 400');
   srv.close();
+}
+
+console.log('\nEnvíos persiste las coordenadas de envio.geocodificado');
+{
+  const { crearConsumidorGeocodificacion } = await import('../envios/src/geocodificacion.js');
+  const consultas = [];
+  const pool = {
+    async query(sql, params) { consultas.push({ sql, params }); return { rowCount: 1 }; },
+  };
+  let colaConsumida;
+  const consumidor = crearConsumidorGeocodificacion({
+    pool,
+    suscribir: async (cola, tipos, handler) => { colaConsumida = cola; bus.suscribir(tipos, handler); },
+    log: callado,
+  });
+  await consumidor.iniciar();
+  assert.equal(colaConsumida, 'envios.geocodificacion');
+
+  await bus.publicar('envio.geocodificado', {
+    envioId: ID1, cliente: 'cliente.demo',
+    origen: { direccion: O, lat: -34.6039, lon: -58.3790 },
+    destino: { direccion: D, lat: -34.5617, lon: -58.4546 },
+  });
+  assert.equal(consultas.length, 1);
+  assert.match(consultas[0].sql, /UPDATE envios/);
+  assert.deepEqual(consultas[0].params, [ID1, -34.6039, -58.3790, -34.5617, -58.4546]);
+  paso('envio.geocodificado -> UPDATE de lat_origen/lon_origen/lat_destino/lon_destino');
+
+  // Postgres devuelve NUMERIC como texto: también se aceptan strings.
+  const ID7 = '01a1a901-5800-7000-8000-000000000007';
+  await bus.publicar('envio.geocodificado', {
+    envioId: ID7, origen: { lat: '-34.6', lon: '-58.4' }, destino: { lat: '-34.5', lon: '-58.3' },
+  });
+  assert.deepEqual(consultas.at(-1).params, [ID7, -34.6, -58.4, -34.5, -58.3]);
+
+  const n = consultas.length;
+  await bus.publicar('envio.geocodificado', { envioId: ID1, origen: {}, destino: {} });
+  await bus.publicar('envio.geocodificado', { envioId: 'no-es-uuid', origen: { lat: 1, lon: 2 } });
+  assert.equal(consultas.length, n);
+  paso('acepta NUMERIC como texto e ignora eventos sin coordenadas o con id inválido');
 }
 
 console.log(`\nTodo OK (${pasos} verificaciones)`);

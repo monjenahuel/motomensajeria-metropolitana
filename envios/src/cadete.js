@@ -135,6 +135,8 @@ export function crearModuloCadete({ pool, publishEvent }) {
         envioId: envioActualizado.id,
         cliente: envioActualizado.cliente,
         mensajero: envioActualizado.mensajero,
+        origen: envioActualizado.origen,
+        destino: envioActualizado.destino,
         estadoAnterior: envio.estado,
         estadoNuevo: estado,
         timestamp: new Date().toISOString(),
