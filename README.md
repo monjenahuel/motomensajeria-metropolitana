@@ -334,7 +334,7 @@ docker compose logs mapas notificaciones     # se ve todo el recorrido
 curl -s localhost:4000/stats                  # consultas al "servicio externo": 3 por envío
 ```
 
-También se ve en la consola de RabbitMQ (`http://localhost:15672`, `guest` / `guest`): colas `mapas.envios` y `notificaciones.cliente`.
+También se ve en la consola de RabbitMQ (`http://localhost:15672`, `guest` / `guest`): colas `mapas.envios` y `q.notificaciones`.
 
 ### Probar la lógica sin Docker
 

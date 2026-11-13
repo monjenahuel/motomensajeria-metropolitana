@@ -78,7 +78,7 @@ Se publica al asignar (ruta + 10 min de retiro) y al pasar a `EN_CAMINO`. `orige
 | Cola | Servicio |
 |---|---|
 | `mapas.envios` | Mapas |
-| `notificaciones.cliente` | Notificaciones |
+| `q.notificaciones` | Notificaciones |
 | `tracking.envios` | Tracking |
 
 ## Garantías y advertencias

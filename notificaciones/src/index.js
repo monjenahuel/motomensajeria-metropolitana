@@ -10,7 +10,7 @@ const notificaciones = crearNotificaciones();
 const broker = await conectarBroker({ url: RABBITMQ_URL, exchange: EXCHANGE_NAME });
 
 await broker.suscribir(
-  'notificaciones.cliente',
+  'q.notificaciones',
   ['envio.creado', 'envio.asignado', 'envio.estado_actualizado', 'envio.eta_estimado', 'envio.geocodificacion_fallida'],
   async (env) => { notificaciones.procesar(env); },
 );
