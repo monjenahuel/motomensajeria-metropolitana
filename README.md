@@ -295,5 +295,82 @@ Estados permitidos: `EN_CAMINO`, `ENTREGADO`, `NO_ENTREGADO`. Cada cambio queda 
 
 ---
 
+## 🗺️ Servicios de Mapas y Notificaciones
+
+Se suman al stack sin modificar Envíos ni Tracking: consumen los eventos que Envíos ya publica en el exchange `motomensajeria.events`.
+
+| Carpeta | Descripción |
+|---|---|
+| `mock-mapas/` | Sistema externo simulado. Imita Nominatim (`/search`) y OSRM (`/route/v1/driving`), cuenta consultas y tiene modo falla. |
+| `mapas/` | Ubica direcciones y estima el ETA. Si el servicio externo cae, usa una estimación propia. |
+| `notificaciones/` | Genera los avisos al cliente y los expone en `GET /notificaciones`. |
+| `docs/contrato-eventos.md` | Eventos, quién los publica y quién los consume. |
+| `test/flujo.mjs` | Prueba de punta a punta sin Docker ni RabbitMQ (21 verificaciones). |
+
+### Endpoints
+
+- `GET /notificaciones` (Gateway `:3000`): avisos del cliente autenticado. El operador y el administrador ven todos. Acepta `?envioId=<uuid>` y `?desde=<id>`. Responde `401` sin token y `403` para `cadete`.
+- `GET :4000/stats`: consultas al servicio externo y estado del modo falla.
+- `POST :4000/stats/reset`: reinicia el contador.
+- `POST :4000/admin/falla` con `{ "activo": true|false }`: simula que mapas está caído.
+
+### Probar el flujo
+
+```bash
+tok() { curl -s -X POST localhost:3000/auth/token -d "grant_type=password&client_id=motomensajeria-web&username=$1&password=$2" | jq -r .access_token; }
+C=$(tok cliente.demo cliente123); O=$(tok operador.demo operador123); K=$(tok cadete.demo cadete123)
+
+ID=$(curl -s -X POST localhost:3000/envios -H "Authorization: Bearer $C" -H "content-type: application/json" \
+  -d '{"origen":"Av. Corrientes 1000, CABA","destino":"Av. Cabildo 2000, CABA"}' | jq -r .id)
+
+curl -s -X POST localhost:3000/operador/asignaciones -H "Authorization: Bearer $O" -H "content-type: application/json" \
+  -d "{\"envioId\":\"$ID\",\"mensajero\":\"cadete.demo\"}"
+
+curl -s -X PATCH localhost:3000/cadete/envios/$ID/estado -H "Authorization: Bearer $K" -H "content-type: application/json" \
+  -d '{"estado":"EN_CAMINO"}'
+
+curl -s localhost:3000/notificaciones -H "Authorization: Bearer $C" | jq
+```
+
+Las colas se ven en la consola de RabbitMQ (`http://localhost:15672`, `guest` / `guest`): `mapas.envios`,
+`envios.geocodificacion` y `q.notificaciones`.
+
+Si quedó la cola vieja `notificaciones.cliente`, borrala con
+`docker exec rabbitmq-broker rabbitmqctl delete_queue notificaciones.cliente`: la reemplaza `q.notificaciones`.
+
+### Probar la lógica sin Docker
+
+```bash
+cd notificaciones && npm install && cd ..
+node test/flujo.mjs
+```
+
+### NFRs
+
+NFR-3 (costo): `POST :4000/stats/reset`, crear y asignar envíos, y `GET :4000/stats` da unas 3 consultas por envío.
+Los reportes de ubicación van a Tracking y no mueven el contador.
+
+NFR-5 (mapas caído): con el envío ya creado, activar la falla y asignarlo; el ETA sale con estimación propia.
+
+```bash
+curl -X POST localhost:4000/admin/falla -H "content-type: application/json" -d '{"activo":true}'
+curl -X POST localhost:4000/admin/falla -H "content-type: application/json" -d '{"activo":false}'
+```
+
+NFR-5 (suscriptor caído): con `docker compose stop notificaciones` la API sigue respondiendo; al arrancarlo
+procesa los eventos que quedaron en la cola.
+
+### Límites
+
+- El ETA es una simplificación: ruta origen → destino más 10 minutos de retiro, sin la posición real del cadete.
+- Mapas y Notificaciones guardan en memoria. Al reiniciar, Mapas recupera el ETA con `origen` y `destino` del evento;
+  Notificaciones pierde el historial, pero procesa los eventos que quedaron en la cola.
+- Los avisos se consultan por polling (`?desde=<id>`): `EventSource` no permite mandar el header `Authorization`.
+- Ningún frontend muestra los avisos todavía; se ven con `curl` o en los logs.
+- `MAPAS_URL` apunta a un solo host con los dos formatos (lo hace el mock). Nominatim y OSRM reales son dos hosts,
+  y Nominatim limita a 1 consulta por segundo.
+
+---
+
 ## 📋 Documentación de Arquitectura y NFRs
 - Especificación formal completa de atributos de calidad (Escenarios SEI de 6 partes y matriz de trade-offs): [docs/NFR.md](file:///c:/Users/vicky/Documents/dev/unahur/motomensajeria-metropolitana/docs/NFR.md).
