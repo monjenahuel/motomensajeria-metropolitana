@@ -17,7 +17,7 @@ export default function DetalleEnvioModal({ envio, onClose }) {
           <div>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Detalle de Envío</span>
             <h3 style={{ fontSize: '1.25rem', fontWeight: 700, fontFamily: 'monospace', color: 'var(--primary)' }}>
-              {envio.numero_seguimiento}
+              {envio.numero_seguimiento || envio.id}
             </h3>
           </div>
           <button onClick={onClose} className="btn btn-outline" style={{ padding: '0.35rem', borderRadius: '50%' }}>
