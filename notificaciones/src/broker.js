@@ -34,8 +34,8 @@ export async function conectarBroker({ url, exchange, intentos = 20, esperaMs = 
 
   // Cola durable con ack manual: si el servicio se cae, los eventos esperan en la cola.
   // El handler recibe { eventId, tipo, data }.
-  async function suscribir(cola, tipos, handler) {
-    await canal.assertQueue(cola, { durable: true });
+  async function suscribir(cola, tipos, handler, { arguments: queueArgs } = {}) {
+    await canal.assertQueue(cola, { durable: true, ...(queueArgs ? { arguments: queueArgs } : {}) });
     for (const t of tipos) await canal.bindQueue(cola, exchange, t);
     await canal.prefetch(10);
     await canal.consume(cola, async (msg) => {

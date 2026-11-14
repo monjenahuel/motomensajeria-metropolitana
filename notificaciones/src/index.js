@@ -13,6 +13,12 @@ await broker.suscribir(
   'q.notificaciones',
   ['envio.creado', 'envio.asignado', 'envio.estado_actualizado', 'envio.eta_estimado', 'envio.geocodificacion_fallida'],
   async (env) => { notificaciones.procesar(env); },
+  {
+    arguments: {
+      'x-dead-letter-exchange': 'motomensajeria.dlx',
+      'x-dead-letter-routing-key': 'dead-letter',
+    },
+  },
 );
 
 const port = Number(process.env.PORT ?? 3000);
