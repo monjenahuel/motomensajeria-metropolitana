@@ -56,7 +56,7 @@ async function main() {
       if (!res.ok) throw new Error(`Error creando pedido ${i + 1}: ${await res.text()}`);
       const data = await res.json();
       pedidosCreados.push(data);
-      console.log(`   📦 Pedido #${i + 1} creado: ID ${data.id} (${data.numero_seguimiento}) -> Evento 'envio.creado' emitido al Broker.`);
+      console.log(`   📦 Pedido #${i + 1} creado: ID ${data.id} (${data.numero_seguimiento || data.id}) -> Evento 'envio.creado' emitido al Broker.`);
     }
 
     // 3. Operador se autentica
@@ -76,7 +76,7 @@ async function main() {
         body: JSON.stringify({ mensajero: 'cadete.demo' })
       });
       if (!res.ok) throw new Error(`Error asignando envío ${envio.id}: ${await res.text()}`);
-      console.log(`   🛵 Envío ${envio.numero_seguimiento} asignado a cadete.demo -> Evento 'envio.asignado' emitido al Broker.`);
+      console.log(`   🛵 Envío ${envio.numero_seguimiento || envio.id} asignado a cadete.demo -> Evento 'envio.asignado' emitido al Broker.`);
     }
 
     // 5. Cadete actualiza los estados a EN_CAMINO y ENTREGADO
@@ -94,7 +94,7 @@ async function main() {
       body: JSON.stringify({ estado: 'EN_CAMINO', motivo: 'Paquete retirado en origen' })
     });
     if (!res.ok) throw new Error(`Error pasando a EN_CAMINO: ${await res.text()}`);
-    console.log(`   📍 Envío ${envioPrueba.numero_seguimiento} pasó a EN_CAMINO.`);
+    console.log(`   📍 Envío ${envioPrueba.numero_seguimiento || envioPrueba.id} pasó a EN_CAMINO.`);
 
     // Transición a ENTREGADO
     res = await fetch(`${BASE_URL}/envios/${envioPrueba.id}/estado`, {
@@ -106,7 +106,7 @@ async function main() {
       body: JSON.stringify({ estado: 'ENTREGADO', motivo: 'Entrega conforme al destinatario' })
     });
     if (!res.ok) throw new Error(`Error pasando a ENTREGADO: ${await res.text()}`);
-    console.log(`   🏁 Envío ${envioPrueba.numero_seguimiento} ENTREGADO.`);
+    console.log(`   🏁 Envío ${envioPrueba.numero_seguimiento || envioPrueba.id} ENTREGADO.`);
 
     // 6. Cliente consulta el detalle final con auditoría en tiempo real
     console.log('\n6️⃣ Cliente consulta trazabilidad y auditoría final...');
