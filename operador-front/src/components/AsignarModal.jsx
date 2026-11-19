@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import Modal from './Modal.jsx';
-import { TRACKING_URL } from '../config.js';
+import { api } from '../api.js';
 
 const SUGERENCIAS_BASE = ['cadete.demo'];
 
@@ -13,8 +13,7 @@ export default function AsignarModal({ envio, onCerrar, onAsignar }) {
   // Sugerencias: cadetes que están reportando posiciones + el usuario de demo.
   useEffect(() => {
     let cancelado = false;
-    fetch(`${TRACKING_URL}/tracking/cadetes`)
-      .then((respuesta) => (respuesta.ok ? respuesta.json() : []))
+    api('/tracking/cadetes')
       .then((lista) => {
         if (cancelado || !Array.isArray(lista)) return;
         const ids = lista.map((posicion) => posicion.cadeteId).filter(Boolean);

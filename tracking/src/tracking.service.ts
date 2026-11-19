@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Observable, Subject, filter } from 'rxjs';
 import { RedisService } from './redis.service';
+import { DatabaseService } from './database.service';
 import { UbicacionDto } from './ubicacion.dto';
 
 export interface Posicion {
@@ -13,12 +14,14 @@ export interface Posicion {
 }
 
 const CHANNEL = 'tracking:posiciones';
+const ESTADOS_CHANNEL = 'tracking:estados';
 const POS_TTL_S = Number(process.env.POS_TTL_S ?? 30); // sin reportes -> la posición expira sola
 
 @Injectable()
 export class TrackingService implements OnModuleInit {
   /** Fan-out interno: cada posición que llega por Redis Pub/Sub se reparte a los clientes SSE de ESTA instancia. */
   private readonly posiciones$ = new Subject<Posicion>();
+  private readonly estados$ = new Subject<{ envioId: string; estado: string }>();
 
   // --- métricas (para verificar los NFR con números) ---
   private latencias: number[] = [];
@@ -26,11 +29,16 @@ export class TrackingService implements OnModuleInit {
   private ventana: number[] = [];
   conexionesSse = 0;
 
-  constructor(private readonly redis: RedisService) {}
+  constructor(private readonly redis: RedisService, private readonly db: DatabaseService) {}
 
   async onModuleInit() {
-    await this.redis.sub.subscribe(CHANNEL);
-    this.redis.sub.on('message', (_canal, msg) => {
+    await this.redis.sub.subscribe(CHANNEL, ESTADOS_CHANNEL);
+    this.redis.sub.on('message', (canal, msg) => {
+      if (canal === ESTADOS_CHANNEL) {
+        this.estados$.next(JSON.parse(msg));
+        return;
+      }
+      if (canal !== CHANNEL) return;
       const p: Posicion = JSON.parse(msg);
       // latencia interna: recepción del POST -> entrega al fan-out SSE
       this.latencias.push(Date.now() - p.recibidoEn);
@@ -76,28 +84,20 @@ export class TrackingService implements OnModuleInit {
     return cadeteId ? this.posiciones$.pipe(filter((p) => p.cadeteId === cadeteId)) : this.posiciones$.asObservable();
   }
 
-  // --- Asignaciones: proyección de solo lectura de los eventos del broker ---
-  // El alta/baja real vive en el módulo Operador del MS de Envíos (PostgreSQL + eventos).
-  async asignar(envioId: string, cadeteId: string) {
-    await this.redis.cmd.set(`asig:${envioId}`, cadeteId);
+  finDeEnvio(envioId: string): Observable<{ envioId: string; estado: string }> {
+    return this.estados$.pipe(filter((e) => e.envioId === envioId));
   }
-  async desasignar(envioId: string) {
-    await this.redis.cmd.del(`asig:${envioId}`);
+
+  async publicarFinDeEnvio(envioId: string, estado: string): Promise<void> {
+    await this.redis.cmd.publish(ESTADOS_CHANNEL, JSON.stringify({ envioId, estado }));
   }
+
+  // PostgreSQL local es la proyección durable; Redis solo conserva GPS/Pub-Sub.
   async cadeteDeEnvio(envioId: string): Promise<string | null> {
-    return this.redis.cmd.get(`asig:${envioId}`);
+    return this.db.cadeteDeEnvio(envioId);
   }
   async asignaciones(): Promise<{ envioId: string; cadeteId: string }[]> {
-    const claves: string[] = [];
-    let cursor = '0';
-    do {
-      const [next, batch] = await this.redis.cmd.scan(cursor, 'MATCH', 'asig:*', 'COUNT', 1000);
-      cursor = next;
-      claves.push(...batch);
-    } while (cursor !== '0');
-    if (!claves.length) return [];
-    const valores = await this.redis.cmd.mget(claves);
-    return claves.map((k, i) => ({ envioId: k.slice(5), cadeteId: valores[i] ?? '' }));
+    return this.db.asignaciones();
   }
 
   async metricas() {
@@ -107,6 +107,7 @@ export class TrackingService implements OnModuleInit {
     const pct = (q: number) => (ord.length ? ord[Math.min(ord.length - 1, Math.floor(q * ord.length))] : null);
     return {
       cadetesConPosicion: (await this.todas()).length,
+      posicionTtlS: POS_TTL_S,
       reportesPorSegundo: Number((this.ventana.length / 5).toFixed(1)),
       reportesTotales: this.recibidos,
       conexionesSse: this.conexionesSse,

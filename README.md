@@ -41,10 +41,11 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 4. **RabbitMQ (`:5672` / UI `:15672`)**: Broker de eventos con Topic Exchange `motomensajeria.events` para desacoplamiento y extensibilidad (NFR-2).
 5. **envios-db (`:5432`)**: Base de datos relacional PostgreSQL con tabla de envíos e historial de auditoría de estados (NFR-7).
 6. **Swagger UI (`:8080`)**: Documentación interactiva del contrato `openapi.yaml`.
-7. **Tracking (`:3002`)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda la última ubicación de cada cadete en Redis con TTL y la distribuye por Pub/Sub, lo que permite escalar instancias horizontalmente. Consume eventos `envio.asignado` y `envio.estado_actualizado` desde RabbitMQ para mantener su proyección de asignaciones; el alta y la baja reales las gestiona el módulo Operador del MS de Envíos.
-8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira a los 30 s si el cadete deja de reportar.
-9. **Simulador**: Genera reportes GPS de cadetes cada 5 s para la demo (25 por defecto; configurable con `SIM_CADETES`, por ejemplo `600` para la prueba de carga).
-10. **Frontend del Operador (`:5173`)**: Aplicación React (Vite) con login contra Keycloak vía Gateway. Permite listar y filtrar envíos, asignarlos a un cadete, liberar asignaciones, consultar el historial y ver el mapa en vivo.
+7. **Tracking (interno)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda GPS temporal en Redis y proyección durable de asignaciones en su propio PostgreSQL. Consume eventos de RabbitMQ y reconcilia periódicamente con Envíos (fuente de verdad). El acceso externo pasa por el Gateway.
+8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira según `TRACKING_POS_TTL_S` si el cadete deja de reportar.
+9. **tracking-db (interno)**: PostgreSQL exclusivo de Tracking con volumen persistente para asignaciones e inbox de eventos.
+10. **Simulador**: Configurado para arrancar con el stack; sus reportes GPS requieren tokens de cadete válidos.
+11. **Frontend del Operador (`:5173`)**: Aplicación React (Vite) con login contra Keycloak vía Gateway. Permite listar y filtrar envíos, asignarlos a un cadete, liberar asignaciones, consultar el historial y ver el mapa en vivo.
 
 ---
 
@@ -54,6 +55,7 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 ```bash
 cp .env.example .env
 ```
+Reemplazá `TRACKING_DB_PASSWORD` y `TRACKING_SYNC_SECRET` por valores aleatorios propios antes de levantar el stack.
 
 ### 2. Levantar el stack completo
 ```bash
@@ -67,18 +69,21 @@ docker compose ps
 ```
 
 ### Tracking en tiempo real
-El stack incluye el microservicio de Tracking y su simulador de cadetes:
+El stack incluye Tracking y la configuración del simulador de cadetes:
 
-- **Panel del operador:** [http://localhost:3002](http://localhost:3002) — todos los cadetes en el mapa y métricas de latencia.
-- **Vista del cliente:** [http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001](http://localhost:3002/cliente.html?envio=01a1a901-5800-7000-8000-000000000001) — solo el seguimiento de ese envío. Requiere que el envío esté asignado a un cadete desde el módulo Operador (ver más abajo).
-- **API a través del gateway:** `http://localhost:3000/tracking/...` (por ejemplo, `http://localhost:3000/tracking/cadetes`). El gateway hace streaming de las respuestas SSE.
+- **Panel del operador:** abrir la pestaña «Mapa en vivo» del frontend del operador. La vista global y sus consultas requieren rol `operador` o `administrador`.
+- **Vista del cliente:** abrir el seguimiento desde «Mis envíos» del frontend del cliente. El enlace al mapa solo aparece en `EN_CAMINO`; para ver el cambio desde `ASIGNADO`, usar «Refrescar» en la lista. El Gateway verifica que sea dueño del envío (o staff); el cadete asignado también puede consultar el seguimiento con su token. Un ID por sí solo no concede acceso. El mapa solo muestra posiciones en `EN_CAMINO`; si se abre una URL directa en `ASIGNADO`, `ENTREGADO` o `NO_ENTREGADO`, muestra un texto sin ubicación. Consulta el estado al abrir y ante errores de SSE, no periódicamente.
+- **API a través del gateway:** `http://localhost:3000/tracking/...` con Bearer válido. Los streams y posiciones por envío requieren `EN_CAMINO` en Envíos y se reconectan periódicamente para volver a validarlo; el estado se consulta con `GET /mapas/envios/:envioId/estado`. Tracking termina los streams existentes al recibir el evento final de RabbitMQ. El stream global del operador sigue mostrando a todos los cadetes. Las vistas HTML están en `/mapas/` y `/mapas/cliente.html?envio=...`; el frontend obtiene primero una cookie HttpOnly de cinco minutos con `POST /mapas/sesion` (Bearer), renovada mientras el mapa está abierto. En despliegues con otros dominios, configurar frontend y Gateway bajo el mismo sitio HTTPS para las cookies SameSite.
 - **Módulo Operador vía gateway:** `http://localhost:3000/operador/asignaciones` (requiere token con rol `operador` o `administrador`).
-- **API directa al microservicio:** `http://localhost:3002/tracking/metrics`.
-- **Puerto interno:** el contenedor `tracking` escucha en `3000` (igual que `envios`); el host lo publica en `3002` para no chocar con el API Gateway. Se puede cambiar con `TRACKING_PORT`.
+- **Puerto interno:** el contenedor `tracking` escucha en `3000`, sin puerto publicado al host. No exponerlo fuera de la red interna.
 
-**Formato de los datos simulados:** el simulador usa los mismos identificadores que producción. El primer cadete es el usuario real `cadete.demo` y el resto `cadete.sim.002`, `cadete.sim.003`, etc. (usernames de Keycloak). Solo reporta posiciones (`cadeteId`, `lat`, `lng`, `rumbo`, `ts`); las asignaciones envío ↔ cadete se crean desde el módulo Operador.
+Tracking lee las asignaciones desde su PostgreSQL, incluso si Redis o Envíos están caídos.
+Al iniciar y cada 60 segundos reconcilia en segundo plano con Envíos usando `TRACKING_SYNC_SECRET`;
+no consulta Envíos por cada mapa. Si se perdió un evento, la recuperación es eventual.
 
-**Módulo Operador (asignaciones):** el MS de Envíos es el dueño de las asignaciones. Persiste en PostgreSQL y publica el evento `envio.asignado`; Tracking se limita a consumirlo.
+**Simulador:** Compose intenta arrancarlo con el stack, pero Tracking rechazará sus reportes GPS sin un token válido de cadete. En este checkout falta `simulator/sim.js`; para usarlo hay que incorporar el script y adaptarlo al flujo autenticado.
+
+**Módulo Operador (asignaciones):** el MS de Envíos es el dueño de las asignaciones. Persiste en PostgreSQL y publica el evento `envio.asignado`; Tracking lo consume para actualizar su proyección y la reconcilia periódicamente con Envíos.
 
 - `PATCH /envios/{id}/asignar` → caso de uso oficial del operador.
 - `GET /operador/asignaciones` → envíos con cadete asignado.
@@ -93,13 +98,13 @@ El stack incluye el microservicio de Tracking y su simulador de cadetes:
 - `PATCH /envios/{id}/estado` → alias de compatibilidad de la ruta anterior.
 
 **Integración con RabbitMQ:** Tracking consume del exchange `motomensajeria.events` mediante la cola durable `tracking.envios`:
-- `envio.asignado` → guarda la asignación envío ↔ cadete en Redis.
+- `envio.asignado` → guarda la asignación envío ↔ cadete en PostgreSQL de Tracking.
 - `envio.estado_actualizado` con estado `PENDIENTE`, `ENTREGADO`, `NO_ENTREGADO` o `CANCELADO` → libera la asignación.
 - `envio.entregado` → también libera la asignación si se emite como evento propio.
 
 Por ahora Tracking solo consume eventos; no publica.
 
-Para la prueba de carga del escenario, levantá con `SIM_CADETES=600` (≈120 reportes/s) o cambialo en `.env`.
+Para pruebas de carga, usar clientes con tokens de cadete válidos. Cambiar `SIM_CADETES` por sí solo no habilita el reporte sin autenticación.
 
 ---
 
@@ -111,6 +116,11 @@ por estado, y actualizar el estado con motivo opcional
 (`PATCH /cadete/envios/{id}/estado`). Los estados disponibles son `EN_CAMINO`,
 `ENTREGADO` y `NO_ENTREGADO`; los envíos finalizados quedan en modo consulta.
 Los datos se actualizan cada 15 segundos y el token se renueva automáticamente.
+Mientras el panel está abierto en primer plano, solicita permiso de ubicación al navegador
+y envía automáticamente la posición real al Gateway cada 5 segundos con su token Bearer.
+El Gateway valida el rol `cadete`, obtiene el username del token y reenvía el reporte a Tracking.
+Al pasar a segundo plano o cerrar sesión deja de enviar. El navegador requiere HTTPS o
+`localhost` para acceder al GPS; en una pestaña en segundo plano no se garantiza seguimiento.
 
 ```bash
 sudo docker compose up -d --build cadete-front
@@ -142,8 +152,8 @@ Casos de uso cubiertos:
 - Liberar asignaciones en estado `ASIGNADO` (`DELETE /operador/asignaciones/{envioId}`).
 - Ver las asignaciones vigentes y los envíos finalizados como historial (`GET /operador/asignaciones`).
 - Consultar el detalle de un envío con su historial de estados (`GET /envios/{id}`).
-- Ver el mapa en vivo embebido desde Tracking (`:3002`).
-- Actualización automática cada 15 s y renovación automática del token.
+- Ver el mapa en vivo embebido desde el Gateway (`:3000`).
+- Actualización en tiempo real por SSE de envíos, asignaciones y detalles abiertos, con renovación automática del token.
 
 **Desarrollo local:**
 
@@ -158,7 +168,7 @@ Variables de build (también configurables en `.env` para Compose):
 | Variable | Default | Uso |
 | :--- | :--- | :--- |
 | `VITE_API_URL` / `APIGATEWAY_URL` | `http://localhost:3000` | API Gateway |
-| `VITE_TRACKING_URL` / `OPERADOR_FRONT_TRACKING_URL` | `http://localhost:3002` | Panel de Tracking embebido |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:5174,http://localhost:5175` | Orígenes permitidos para la cookie de mapas del Gateway |
 | `VITE_KEYCLOAK_CLIENT_ID` / `OPERADOR_FRONT_KEYCLOAK_CLIENT_ID` | `motomensajeria-web` | Cliente público de Keycloak |
 | `OPERADOR_FRONT_PORT` | `5173` | Puerto publicado por el contenedor nginx |
 
@@ -282,6 +292,83 @@ curl -X PATCH http://localhost:3000/cadete/envios/01a1a901-5800-7000-8000-000000
 ```
 
 Estados permitidos: `EN_CAMINO`, `ENTREGADO`, `NO_ENTREGADO`. Cada cambio queda en el historial y publica `envio.estado_actualizado`; al llegar a un estado final, Tracking libera la asignación y el envío deja de aparecer en el mapa.
+
+---
+
+## 🗺️ Servicios de Mapas y Notificaciones
+
+Se suman al stack sin modificar Envíos ni Tracking: consumen los eventos que Envíos ya publica en el exchange `motomensajeria.events`.
+
+| Carpeta | Descripción |
+|---|---|
+| `mock-mapas/` | Sistema externo simulado. Imita Nominatim (`/search`) y OSRM (`/route/v1/driving`), cuenta consultas y tiene modo falla. |
+| `mapas/` | Ubica direcciones y estima el ETA. Si el servicio externo cae, usa una estimación propia. |
+| `notificaciones/` | Genera los avisos al cliente y los expone en `GET /notificaciones`. |
+| `docs/contrato-eventos.md` | Eventos, quién los publica y quién los consume. |
+| `test/flujo.mjs` | Prueba de punta a punta sin Docker ni RabbitMQ (21 verificaciones). |
+
+### Endpoints
+
+- `GET /notificaciones` (Gateway `:3000`): avisos del cliente autenticado. El operador y el administrador ven todos. Acepta `?envioId=<uuid>` y `?desde=<id>`. Responde `401` sin token y `403` para `cadete`.
+- `GET :4000/stats`: consultas al servicio externo y estado del modo falla.
+- `POST :4000/stats/reset`: reinicia el contador.
+- `POST :4000/admin/falla` con `{ "activo": true|false }`: simula que mapas está caído.
+
+### Probar el flujo
+
+```bash
+tok() { curl -s -X POST localhost:3000/auth/token -d "grant_type=password&client_id=motomensajeria-web&username=$1&password=$2" | jq -r .access_token; }
+C=$(tok cliente.demo cliente123); O=$(tok operador.demo operador123); K=$(tok cadete.demo cadete123)
+
+ID=$(curl -s -X POST localhost:3000/envios -H "Authorization: Bearer $C" -H "content-type: application/json" \
+  -d '{"origen":"Av. Corrientes 1000, CABA","destino":"Av. Cabildo 2000, CABA"}' | jq -r .id)
+
+curl -s -X POST localhost:3000/operador/asignaciones -H "Authorization: Bearer $O" -H "content-type: application/json" \
+  -d "{\"envioId\":\"$ID\",\"mensajero\":\"cadete.demo\"}"
+
+curl -s -X PATCH localhost:3000/cadete/envios/$ID/estado -H "Authorization: Bearer $K" -H "content-type: application/json" \
+  -d '{"estado":"EN_CAMINO"}'
+
+curl -s localhost:3000/notificaciones -H "Authorization: Bearer $C" | jq
+```
+
+Las colas se ven en la consola de RabbitMQ (`http://localhost:15672`, `guest` / `guest`): `mapas.envios`,
+`envios.geocodificacion` y `q.notificaciones`.
+
+Si quedó la cola vieja `notificaciones.cliente`, borrala con
+`docker exec rabbitmq-broker rabbitmqctl delete_queue notificaciones.cliente`: la reemplaza `q.notificaciones`.
+
+### Probar la lógica sin Docker
+
+```bash
+cd notificaciones && npm install && cd ..
+node test/flujo.mjs
+```
+
+### NFRs
+
+NFR-3 (costo): `POST :4000/stats/reset`, crear y asignar envíos, y `GET :4000/stats` da unas 3 consultas por envío.
+Los reportes de ubicación van a Tracking y no mueven el contador.
+
+NFR-5 (mapas caído): con el envío ya creado, activar la falla y asignarlo; el ETA sale con estimación propia.
+
+```bash
+curl -X POST localhost:4000/admin/falla -H "content-type: application/json" -d '{"activo":true}'
+curl -X POST localhost:4000/admin/falla -H "content-type: application/json" -d '{"activo":false}'
+```
+
+NFR-5 (suscriptor caído): con `docker compose stop notificaciones` la API sigue respondiendo; al arrancarlo
+procesa los eventos que quedaron en la cola.
+
+### Límites
+
+- El ETA es una simplificación: ruta origen → destino más 10 minutos de retiro, sin la posición real del cadete.
+- Mapas y Notificaciones guardan en memoria. Al reiniciar, Mapas recupera el ETA con `origen` y `destino` del evento;
+  Notificaciones pierde el historial, pero procesa los eventos que quedaron en la cola.
+- Los avisos se consultan por polling (`?desde=<id>`): `EventSource` no permite mandar el header `Authorization`.
+- Ningún frontend muestra los avisos todavía; se ven con `curl` o en los logs.
+- `MAPAS_URL` apunta a un solo host con los dos formatos (lo hace el mock). Nominatim y OSRM reales son dos hosts,
+  y Nominatim limita a 1 consulta por segundo.
 
 ---
 

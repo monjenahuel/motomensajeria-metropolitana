@@ -5,11 +5,9 @@ export default function AsignacionesPage({
   asignaciones,
   cargando,
   actualizado,
-  auto,
-  onAuto,
-  onRefrescar,
   onLiberar,
   onDetalle,
+  onSeguimiento,
 }) {
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('TODOS');
@@ -51,13 +49,6 @@ export default function AsignacionesPage({
           </div>
           <div className="panel-tools">
             <span className="actualizado">{actualizado ? `Actualizado ${hora(actualizado)}` : '—'}</span>
-            <label className="switch">
-              <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)} />
-              <span>Auto 15 s</span>
-            </label>
-            <button type="button" className="btn btn-ghost" onClick={onRefrescar} disabled={cargando}>
-              {cargando ? 'Actualizando…' : 'Actualizar'}
-            </button>
           </div>
         </div>
 
@@ -94,7 +85,7 @@ export default function AsignacionesPage({
               {filtradas.map((envio) => (
                 <tr key={envio.id}>
                   <td>
-                    <button type="button" className="link-id" title={envio.id} onClick={() => onDetalle(envio.id)}>
+                    <button type="button" className="link-id" title={`Seguir envío ${envio.id} en el mapa`} onClick={() => onSeguimiento(envio.id)}>
                       {idCorto(envio.id)}
                     </button>
                   </td>

@@ -5,12 +5,10 @@ export default function EnviosPage({
   envios,
   cargando,
   actualizado,
-  auto,
-  onAuto,
-  onRefrescar,
   onAsignar,
   onLiberar,
   onDetalle,
+  onSeguimiento,
 }) {
   const [busqueda, setBusqueda] = useState('');
   const [estado, setEstado] = useState('TODOS');
@@ -61,13 +59,6 @@ export default function EnviosPage({
           </div>
           <div className="panel-tools">
             <span className="actualizado">{actualizado ? `Actualizado ${hora(actualizado)}` : '—'}</span>
-            <label className="switch">
-              <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)} />
-              <span>Auto 15 s</span>
-            </label>
-            <button type="button" className="btn btn-ghost" onClick={onRefrescar} disabled={cargando}>
-              {cargando ? 'Actualizando…' : 'Actualizar'}
-            </button>
           </div>
         </div>
 
@@ -107,8 +98,8 @@ export default function EnviosPage({
                     <button
                       type="button"
                       className="link-id"
-                      title={envio.id}
-                      onClick={() => onDetalle(envio.id)}
+                      title={`Seguir envío ${envio.id} en el mapa`}
+                      onClick={() => onSeguimiento(envio.id)}
                     >
                       {idCorto(envio.id)}
                     </button>
@@ -132,7 +123,7 @@ export default function EnviosPage({
                   <td className="muted">{fecha(envio.actualizado_en)}</td>
                   <td className="acciones">
                     <button type="button" className="btn btn-sm btn-ghost" onClick={() => onDetalle(envio.id)}>
-                      Ver
+                      Detalles
                     </button>
                     {envio.estado === 'PENDIENTE' && (
                       <button type="button" className="btn btn-sm btn-primary" onClick={() => onAsignar(envio)}>

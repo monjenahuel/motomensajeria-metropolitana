@@ -3,13 +3,12 @@ import Modal from './Modal.jsx';
 import { api } from '../api.js';
 import { ESTADO_LABEL, claseEstado, fecha } from '../format.js';
 
-export default function DetalleModal({ envioId, onCerrar }) {
+export default function DetalleModal({ envioId, revision, onCerrar }) {
   const [envio, setEnvio] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelado = false;
-    setEnvio(null);
     setError(null);
 
     api(`/envios/${envioId}`)
@@ -23,7 +22,7 @@ export default function DetalleModal({ envioId, onCerrar }) {
     return () => {
       cancelado = true;
     };
-  }, [envioId]);
+  }, [envioId, revision]);
 
   return (
     <Modal

@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, MessageEvent, NotFoundException, Param, Post, Sse } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, MessageEvent, NotFoundException, Param, Post, Sse, UseGuards } from '@nestjs/common';
 import { Observable, concat, from, interval, map, merge, of, switchMap } from 'rxjs';
 import { TrackingService } from './tracking.service';
 import { UbicacionDto } from './ubicacion.dto';
+import { CadeteAuthGuard } from './cadete-auth.guard';
 
 @Controller('tracking')
 export class TrackingController {
@@ -9,6 +10,7 @@ export class TrackingController {
 
   // ---------- Entrada: app del cadete ----------
   @Post('ubicaciones')
+  @UseGuards(CadeteAuthGuard)
   @HttpCode(202)
   async reportar(@Body() dto: UbicacionDto) {
     await this.tracking.registrar(dto);
@@ -48,11 +50,26 @@ export class TrackingController {
   }
 
   private async flujoDeEnvio(envioId: string): Promise<Observable<MessageEvent>> {
-    const cadeteId = await this.tracking.cadeteDeEnvio(envioId);
+    let cadeteId: string | null;
+    try {
+      cadeteId = await this.tracking.cadeteDeEnvio(envioId);
+    } catch {
+      // El EventSource se reconecta automáticamente tras un fallo transitorio de la base local.
+      return of({ type: 'error', data: { mensaje: 'No se pudo leer la asignación. Reconectando…', recuperable: true } });
+    }
     if (!cadeteId) return of({ type: 'error', data: { mensaje: 'Envío sin cadete asignado' } });
     const ultima = await this.tracking.ultimaPosicion(cadeteId);
     const vivo = this.tracking.stream(cadeteId).pipe(map((p) => ({ data: p })));
-    return this.conLatido(ultima ? concat(of({ data: ultima }), vivo) : vivo);
+    const posiciones = this.conLatido(ultima ? concat(of({ data: ultima }), vivo) : vivo);
+    return new Observable<MessageEvent>((sub) => {
+      // Suscribir primero la finalización para no enviar más GPS tras recibirla.
+      const fin = this.tracking.finDeEnvio(envioId).subscribe(({ estado }) => {
+        sub.next({ type: 'estado_final', data: { estado } });
+        sub.complete();
+      });
+      const datos = sub.closed ? null : posiciones.subscribe(sub);
+      return () => { fin.unsubscribe(); datos?.unsubscribe(); };
+    });
   }
 
   private conLatido(source: Observable<MessageEvent>): Observable<MessageEvent> {
@@ -70,7 +87,7 @@ export class TrackingController {
 
   // ---------- Proyección de asignaciones (solo lectura) ----------
   // Las asignaciones se gestionan en el módulo Operador del MS de Envíos.
-  // Tracking solo las recibe por RabbitMQ y las expone para las vistas de la demo.
+  // Tracking las proyecta desde RabbitMQ, las reconcilia y las lee de PostgreSQL propio.
   @Get('asignaciones')
   asignaciones() {
     return this.tracking.asignaciones();

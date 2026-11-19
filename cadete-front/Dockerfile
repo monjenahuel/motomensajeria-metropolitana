@@ -7,7 +7,7 @@ RUN npm ci
 COPY . .
 
 # Variables de Vite: se hornean en el bundle durante el build.
-# El navegador las usa para llamar al gateway y al panel de tracking.
+# El navegador llama al gateway, que reenvía las ubicaciones a Tracking.
 ARG VITE_API_URL=http://localhost:3000
 ARG VITE_KEYCLOAK_CLIENT_ID=motomensajeria-web
 ENV VITE_API_URL=$VITE_API_URL

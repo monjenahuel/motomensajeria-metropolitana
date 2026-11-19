@@ -53,7 +53,7 @@
     <span><i class="pt" style="background:var(--off)"></i>Sin señal</span>
     <span><i class="pt" style="background:var(--sel)"></i>Siguiendo</span>
   </div>
-  <div class="sub" style="margin-top:10px">Hacé clic en un cadete para seguir su envío. Vista del cliente: <a href="/cliente.html" target="_blank" style="color:var(--sel)">/cliente.html</a></div>
+  <div class="sub" style="margin-top:10px">Hacé clic en un cadete para seguir su envío.</div>
 </div>
 
 <div id="detalle" class="panel">
@@ -74,7 +74,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 const VERDE = '#34d399', GRIS = '#6b7280', AMBAR = '#fbbf24';
-const SIN_SENAL_MS = 12000;          // si no reporta en 12 s, se marca "sin señal"
+let sinSenalMs = 30000;             // valor inicial; se sincroniza con el TTL de Tracking
 const $ = (id) => document.getElementById(id);
 
 // Zona de operación: el polígono del AMBA con un margen
@@ -113,7 +113,7 @@ function recibir(p, inicial = false) {
     c.dur = Math.min(8000, Math.max(800, ahora - c.perf));   // interpola durante el intervalo real entre reportes
     c.perf = ahora;
   }
-  c.llegada = Date.now();
+  c.llegada = Number.isFinite(p.recibidoEn) ? p.recibidoEn : Date.now();
   if (!inicial) {
     llegadas.push(Date.now());
     const d = Date.now() - p.ts;                              // reloj del simulador = reloj del navegador (misma máquina)
@@ -136,7 +136,7 @@ function frame() {
 function refrescarHud() {
   let activos = 0, sin = 0;
   for (const [id, c] of cadetes) {
-    const viva = Date.now() - c.llegada < SIN_SENAL_MS;
+    const viva = Date.now() - c.llegada < sinSenalMs;
     viva ? activos++ : sin++;
     c.m.setStyle({ fillColor: id === seleccionado ? AMBAR : viva ? VERDE : GRIS, radius: id === seleccionado ? 8 : 5 });
   }
@@ -151,6 +151,7 @@ function refrescarHud() {
 async function refrescarMetricas() {
   try {
     const m = await (await fetch('/tracking/metrics')).json();
+    if (Number.isFinite(m.posicionTtlS) && m.posicionTtlS > 0) sinSenalMs = m.posicionTtlS * 1000;
     $('interna').textContent = m.latenciaInternaMs.p95 ?? '–';
     $('sse').textContent = m.conexionesSse;
   } catch {}
@@ -191,17 +192,24 @@ $('dejar').onclick = dejar;
 map.on('dragstart', () => { $('centrar').checked = false; });
 
 // ---- Arranque ----
+async function actualizarAsignaciones() {
+  const r = await fetch('/tracking/asignaciones');
+  if (!r.ok) throw new Error('No se pudieron recuperar las asignaciones');
+  const lista = await r.json();
+  envioDe.clear();
+  for (const a of lista) envioDe.set(a.cadeteId, a.envioId);
+}
 async function iniciar() {
-  try { for (const a of await (await fetch('/tracking/asignaciones')).json()) envioDe.set(a.cadeteId, a.envioId); } catch {}
+  try { await actualizarAsignaciones(); } catch {}
   try { for (const p of await (await fetch('/tracking/cadetes')).json()) recibir(p, true); } catch {}
   const es = new EventSource('/tracking/stream');      // vista del operador: todas las posiciones
-  es.onopen = () => { $('estado').className = 'estado vivo'; $('estadoTxt').textContent = 'En vivo'; };
+  es.onopen = () => { $('estado').className = 'estado vivo'; $('estadoTxt').textContent = 'En vivo'; void actualizarAsignaciones().catch(() => {}); };
   es.onerror = () => { $('estado').className = 'estado'; $('estadoTxt').textContent = 'Reconectando…'; };
   es.onmessage = (e) => {
     const p = JSON.parse(e.data);
     if (!envioDe.has(p.cadeteId) && Date.now() - ultimaCargaAsig > 5000) {   // cadete nuevo: refresca asignaciones (máx. cada 5 s)
       ultimaCargaAsig = Date.now();
-      fetch('/tracking/asignaciones').then((r) => r.json()).then((l) => l.forEach((a) => envioDe.set(a.cadeteId, a.envioId))).catch(() => {});
+      void actualizarAsignaciones().catch(() => {});
     }
     recibir(p);
   };
