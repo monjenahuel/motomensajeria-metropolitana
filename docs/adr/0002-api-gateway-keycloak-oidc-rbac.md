@@ -10,7 +10,7 @@ El sistema expone tres aplicaciones web diferenciadas por rol (`operador-front` 
 Establecer un **API Gateway** (`apigateway/`, puerto `:3000`) como único punto de entrada HTTP/SSE para clientes externos, respaldado por **Keycloak** (`keycloak/realm-export.json`, realm `motomensajeria`) como proveedor de identidad OIDC:
 
 1. **Autenticación centralizada en `/auth/token` y `/auth/me`:** las SPAs obtienen y refrescan tokens JWT mediante el Gateway sin acoplarse directamente a los endpoints internos de Keycloak.
-2. **Validación stateless por JWKS + RBAC en dos capas:** el Gateway verifica firma, emisor y roles (`administrador`, `operador`, `cadete`, `cliente`) antes de proxyear hacia `envios`, `tracking` o `notificaciones`, y los microservicios revalidan permisos finos (p. ej., propiedad del envío por `cliente` o `cadete`).
+2. **Validación stateless por JWKS + RBAC en dos capas:** el Gateway verifica firma, emisor y roles (`administrador`, `operador`, `cadete`, `cliente`) antes de proxear hacia `envios`, `tracking` o `notificaciones` (incluyendo el stream SSE `GET /notificaciones/stream` para todos los roles autenticados), y los microservicios revalidan permisos finos (p. ej., propiedad del envío por `cliente` o `cadete`).
 3. **Sesión de mapas por Cookie `HttpOnly`:** para iframes y `EventSource` (SSE) que no permiten cabecera `Authorization`, el Gateway provee `POST/DELETE /mapas/sesion` emitiendo la cookie `mapa_token` (`HttpOnly; SameSite=Lax; Path=/mapas`) sin exponer el JWT en la URL.
 4. **Errores estandarizados:** respuestas de error bajo RFC 7807 (`application/problem+json`).
 

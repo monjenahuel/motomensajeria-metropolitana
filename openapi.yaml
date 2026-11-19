@@ -3,14 +3,20 @@ info:
   title: API de Motomensajería Metropolitana
   version: 1.0.0
   description: |
-    API REST para la gestión de envíos, asignación por operadores y actualización de estados por cadetes.
-    Protegida mediante OIDC (Keycloak) con validación de roles en Gateway y Microservicio (Zero Trust).
-    Los eventos de dominio se publican asíncronamente vía RabbitMQ (Topic Exchange).
+    API REST y SSE para la gestión de envíos, asignación por operadores, actualización de estados y telemetría por cadetes.
+    Protegida mediante OIDC (Keycloak) con validación de roles en API Gateway y microservicios (Zero Trust).
+    Los eventos de dominio se publican asíncronamente vía RabbitMQ (`motomensajeria.events`).
+
+    ### Estrategia de versionado
+    - **Prefijo en URI por versión mayor:** las rutas oficiales de la versión 1 se exponen bajo `/v1` (`http://localhost:3000/v1/...`).
+    - **Cabecera informativa:** todas las respuestas del API Gateway incluyen el header `API-Version: 1.0`.
+    - **Compatibilidad y evolución:** los cambios aditivos retrocompatibles (nuevos campos opcionales o endpoints) se incorporan dentro de `v1`. Ante cambios incompatibles (*breaking changes*), se introducirá `/v2` manteniendo `/v1` durante la ventana de transición.
+    - **Alias de compatibilidad y deprecación:** durante la transición se conservan las rutas sin prefijo como alias equivalentes en el Gateway, y las rutas superadas se marcan con `deprecated: true` (como `PATCH /envios/{id}/estado`, reemplazada por `PATCH /cadete/envios/{id}/estado`).
 servers:
+  - url: http://localhost:3000/v1
+    description: API Gateway v1 (punto de entrada oficial versionado)
   - url: http://localhost:3000
-    description: API Gateway (punto de entrada unificado, incluye `/envios`, `/operador`, `/cadete` y `/tracking`)
-  - url: http://localhost:3002
-    description: Microservicio de Tracking (acceso directo; SSE sin autenticación en la demo)
+    description: API Gateway (alias de compatibilidad sin prefijo)
 tags:
   - name: Autenticación
     description: Obtención de tokens OIDC y perfil
@@ -21,7 +27,11 @@ tags:
   - name: Cadete
     description: Envíos asignados al cadete autenticado y actualización de su estado (módulo Cadete del MS de Envíos)
   - name: Tracking
-    description: Posiciones GPS en tiempo real (Redis + SSE) y consumo de eventos de RabbitMQ
+    description: Posiciones GPS en tiempo real (Redis + SSE) y proyección de asignaciones
+  - name: Notificaciones
+    description: Consulta histórica y stream SSE en vivo de avisos por rol
+  - name: Mapas
+    description: Gestión de cookie HttpOnly para embebido seguro de mapas SSE
   - name: Sistema
     description: Verificación de salud y diagnóstico
 
@@ -462,13 +472,10 @@ paths:
       tags: [Tracking]
       summary: Reportar la posición GPS de un cadete
       description: |
-        Por el Gateway requiere un Bearer token con rol cadete. El Gateway agrega
-        cadeteId a partir del username del token (ignora cualquier cadeteId enviado
-        en el cuerpo) y reenvía la posición a Tracking. Tracking guarda la última
-        posición con TTL configurable y la publica por Redis Pub/Sub para SSE.
-        El endpoint directo de Tracking (:3002) sigue siendo público para el simulador de la demo.
-      security:
-        - BearerAuth: []
+        Requiere token Bearer con rol `cadete`. El API Gateway sobreescribe
+        `cadeteId` a partir de `preferred_username` del token (y `CadeteAuthGuard`
+        lo revalida en `tracking`), ignorando cualquier `cadeteId` enviado en el cuerpo.
+        Persiste en `tracking-redis` con TTL y publica por Redis Pub/Sub para SSE.
       requestBody:
         required: true
         content:
@@ -479,7 +486,7 @@ paths:
         '202':
           description: Posición aceptada y publicada
         '400':
-          description: Datos inválidos (validación de NestJS)
+          $ref: '#/components/responses/ProblemDetails400'
         '401':
           $ref: '#/components/responses/ProblemDetails401'
         '403':
@@ -489,7 +496,7 @@ paths:
     get:
       tags: [Tracking]
       summary: Última posición de todos los cadetes con señal
-      security: []
+      description: Exclusivo para roles `operador` o `administrador` vía API Gateway.
       responses:
         '200':
           description: Posiciones vigentes (las expiradas no se incluyen)
@@ -499,19 +506,24 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Posicion'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
 
   /tracking/cadetes/{id}/posicion:
     get:
       tags: [Tracking]
       summary: Última posición de un cadete
-      security: []
+      description: |
+        Requiere rol `operador` / `administrador`, o rol `cadete` consultando su propia posición (`id == preferred_username`).
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
-            example: C-001
+            example: cadete.demo
       responses:
         '200':
           description: Última posición conocida
@@ -519,21 +531,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Posicion'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
         '404':
-          description: Sin posición reciente para ese cadete (expiró el TTL)
+          $ref: '#/components/responses/ProblemDetails404'
 
   /tracking/envios/{envioId}/posicion:
     get:
       tags: [Tracking]
       summary: Última posición del cadete asignado a un envío
-      security: []
+      description: |
+        Accesible vía Gateway para el dueño del envío, el cadete asignado o staff (`operador`/`administrador`).
+        Solo disponible cuando el envío está en estado `EN_CAMINO` (devuelve `409 Conflict` en otros estados).
       parameters:
         - name: envioId
           in: path
           required: true
           schema:
             type: string
-            example: E-001
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000002
       responses:
         '200':
           description: Última posición conocida del cadete asignado
@@ -541,28 +558,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Posicion'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
         '404':
-          description: Envío sin cadete asignado o posición expirada
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          $ref: '#/components/responses/ProblemDetails409'
 
   /tracking/envios/{envioId}/stream:
     get:
       tags: [Tracking]
       summary: Seguimiento en vivo de un envío (SSE, vista del cliente)
       description: |
-        Devuelve primero la última posición conocida del cadete asignado y luego
-        las actualizaciones en vivo. Solo abre el canal de ese envío.
+        Entrega primero la última posición conocida del cadete asignado y luego
+        las actualizaciones en vivo. Requiere BearerAuth (o cookie HttpOnly `mapa_token`
+        vía `/mapas/tracking/envios/{envioId}/stream`), ownership sobre el envío y estado
+        `EN_CAMINO`. El Gateway reconecta cada 30 s para revalidar permisos.
 
         **No usar "Try it out" de Swagger UI:** el canal SSE queda abierto y
         Swagger espera una respuesta completa. Probarlo con `curl -N` o desde
-        las vistas HTML del mapa en vivo.
-      security: []
+        las vistas del mapa en vivo.
       parameters:
         - name: envioId
           in: path
           required: true
           schema:
             type: string
-            example: E-001
+            format: uuid
+            example: 01a1a901-5800-7000-8000-000000000002
       responses:
         '200':
           description: Flujo SSE con eventos `data` y `ping` cada 15 s
@@ -572,6 +595,12 @@ paths:
                 type: string
               example: |
                 data: {"cadeteId":"cadete.demo","lat":-34.6037,"lng":-58.3816,"ts":1760000000000,"recibidoEn":1760000000100,"rumbo":90}
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '404':
+          $ref: '#/components/responses/ProblemDetails404'
+        '409':
+          $ref: '#/components/responses/ProblemDetails409'
 
   /tracking/stream:
     get:
@@ -579,11 +608,11 @@ paths:
       summary: Todas las posiciones en vivo (SSE, vista del operador)
       description: |
         Canal SSE con todas las posiciones de los cadetes y un `ping` cada 15 s.
+        Exclusivo para roles `operador` o `administrador`.
 
         **No usar "Try it out" de Swagger UI:** el canal SSE queda abierto y
         Swagger espera una respuesta completa. Probarlo con `curl -N` o desde
-        el panel del operador en `http://localhost:3002`.
-      security: []
+        `operador-front`.
       responses:
         '200':
           description: Flujo SSE con todas las posiciones y `ping` cada 15 s
@@ -593,16 +622,18 @@ paths:
                 type: string
               example: |
                 data: {"cadeteId":"cadete.demo","lat":-34.6037,"lng":-58.3816,"ts":1760000000000,"recibidoEn":1760000000100,"rumbo":90}
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
 
   /tracking/asignaciones:
     get:
       tags: [Tracking]
       summary: Proyección de asignaciones envío ↔ cadete
       description: |
-        Vista de solo lectura de las asignaciones que Tracking recibió por RabbitMQ.
-        El alta y la baja se gestionan en el módulo Operador del MS de Envíos
-        (`/operador/asignaciones`), no en Tracking.
-      security: []
+        Vista de solo lectura de las asignaciones que Tracking recibió por RabbitMQ
+        y reconcilió contra Envíos. Exclusivo de `operador` o `administrador`.
       responses:
         '200':
           description: Asignaciones vigentes según los eventos consumidos
@@ -612,12 +643,16 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Asignacion'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
 
   /tracking/metrics:
     get:
       tags: [Tracking]
       summary: Métricas del servicio de Tracking
-      security: []
+      description: Métricas de observabilidad y percentiles internos. Exclusivo de `operador` o `administrador` vía Gateway.
       responses:
         '200':
           description: Reportes por segundo, conexiones SSE y latencias internas
@@ -625,6 +660,89 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MetricasTracking'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+
+  /notificaciones:
+    get:
+      tags: [Notificaciones]
+      summary: Listar avisos de envíos
+      description: |
+        El rol `cliente` consulta únicamente sus propios avisos; `operador` y
+        `administrador` pueden ver todos los avisos registrados.
+      parameters:
+        - name: envioId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: desde
+          in: query
+          required: false
+          description: Filtra avisos con id numérico estrictamente mayor al indicado (`>= 0`)
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: Lista de avisos ordenados cronológicamente
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notificacion'
+        '400':
+          $ref: '#/components/responses/ProblemDetails400'
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+
+  /notificaciones/stream:
+    get:
+      tags: [Notificaciones]
+      summary: Stream SSE de eventos y avisos en tiempo real
+      description: |
+        Emite eventos `notificacion` en vivo filtrados según el rol autenticado
+        (`cliente`, `cadete`, `operador`, `administrador`), con latido `: ping` cada 15 s.
+      responses:
+        '200':
+          description: Flujo SSE `text/event-stream`
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+
+  /mapas/sesion:
+    post:
+      tags: [Mapas]
+      summary: Iniciar sesión de mapas vía cookie HttpOnly
+      description: |
+        Valida el Bearer JWT del usuario y emite la cookie `mapa_token` (`HttpOnly; SameSite=Lax; Path=/mapas; Max-Age=300`)
+        para autenticar vistas iframe y `EventSource` bajo `/mapas/*` sin exponer tokens en la URL.
+      responses:
+        '204':
+          description: Cookie `mapa_token` emitida
+        '401':
+          $ref: '#/components/responses/ProblemDetails401'
+        '403':
+          $ref: '#/components/responses/ProblemDetails403'
+    delete:
+      tags: [Mapas]
+      summary: Cerrar sesión de mapas
+      description: Expira inmediatamente la cookie `mapa_token` (`Max-Age=0`).
+      security: []
+      responses:
+        '204':
+          description: Sesión de mapas revocada
 
 components:
   securitySchemes:
@@ -858,6 +976,9 @@ components:
         cadetesConPosicion:
           type: integer
           example: 25
+        posicionTtlS:
+          type: integer
+          example: 300
         reportesPorSegundo:
           type: number
           example: 5.0
@@ -881,6 +1002,29 @@ components:
               nullable: true
             muestras:
               type: integer
+
+    Notificacion:
+      type: object
+      properties:
+        id:
+          type: integer
+        envioId:
+          type: string
+          format: uuid
+        cliente:
+          type: string
+          nullable: true
+        mensajero:
+          type: string
+          nullable: true
+        tipo:
+          type: string
+          example: envio.estado_actualizado
+        mensaje:
+          type: string
+        fecha:
+          type: string
+          format: date-time
 
     ProblemDetails:
       type: object
@@ -918,6 +1062,18 @@ components:
             $ref: '#/components/schemas/ProblemDetails'
     ProblemDetails404:
       description: Recurso no encontrado (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ProblemDetails409:
+      description: Conflicto de estado en la máquina de estados (RFC 9457)
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+    ProblemDetails502:
+      description: Servicio downstream o proveedor de identidad no disponible (RFC 9457)
       content:
         application/problem+json:
           schema:

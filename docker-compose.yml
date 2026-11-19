@@ -332,7 +332,10 @@ services:
       PORT: 3000
       RABBITMQ_URL: ${RABBITMQ_URL:?Defini RABBITMQ_URL en .env}
       EXCHANGE_NAME: ${EXCHANGE_NAME:?Defini EXCHANGE_NAME en .env}
-      MAPAS_URL: http://mock-mapas:4000
+      MAPAS_URL: ${MAPAS_URL:-http://mock-mapas:4000}
+      GEOCODE_URL: ${GEOCODE_URL:-}
+      ROUTE_URL: ${ROUTE_URL:-}
+      MAPAS_TIMEOUT_MS: ${MAPAS_TIMEOUT_MS:-2000}
     depends_on:
       rabbitmq:
         condition: service_healthy

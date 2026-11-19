@@ -3,12 +3,16 @@ import { conectarBroker } from './broker.js';
 import { crearClienteMapas } from './cliente-mapas.js';
 import { crearHandlers } from './handlers.js';
 
-const { RABBITMQ_URL, EXCHANGE_NAME, MAPAS_URL } = process.env;
-if (!RABBITMQ_URL || !EXCHANGE_NAME || !MAPAS_URL) {
-  throw new Error('Faltan las variables RABBITMQ_URL, EXCHANGE_NAME y/o MAPAS_URL');
+const { RABBITMQ_URL, EXCHANGE_NAME, MAPAS_URL, GEOCODE_URL, ROUTE_URL, MAPAS_TIMEOUT_MS } = process.env;
+const geocodeUrl = GEOCODE_URL || MAPAS_URL;
+const routeUrl = ROUTE_URL || MAPAS_URL;
+const timeoutMs = Number(MAPAS_TIMEOUT_MS) || 2000;
+
+if (!RABBITMQ_URL || !EXCHANGE_NAME || !geocodeUrl || !routeUrl) {
+  throw new Error('Faltan las variables RABBITMQ_URL, EXCHANGE_NAME y/o MAPAS_URL (o GEOCODE_URL y ROUTE_URL)');
 }
 
-const mapas = crearClienteMapas({ baseUrl: MAPAS_URL });
+const mapas = crearClienteMapas({ geocodeUrl, routeUrl, timeoutMs });
 const broker = await conectarBroker({ url: RABBITMQ_URL, exchange: EXCHANGE_NAME });
 const handlers = crearHandlers({
   mapas,
@@ -26,4 +30,4 @@ http.createServer((req, res) => {
   if (req.url === '/health') return res.end(JSON.stringify({ status: 'ok', service: 'mapas' }));
   if (req.url === '/stats') return res.end(JSON.stringify(mapas.stats));
   res.statusCode = 404; res.end(JSON.stringify({ error: 'ruta no encontrada' }));
-}).listen(port, () => console.log(`Servicio de mapas escuchando en el puerto ${port} (mapas externo: ${MAPAS_URL})`));
+}).listen(port, () => console.log(`Servicio de mapas escuchando en el puerto ${port} (geocode: ${geocodeUrl}, route: ${routeUrl})`));

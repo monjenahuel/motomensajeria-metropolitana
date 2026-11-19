@@ -7,7 +7,7 @@
 Los proveedores externos de mapas (Nominatim para geocodificación y OSRM para ruteo, simulados en desarrollo con `mock-mapas`) tienen latencia variable, cuotas de uso y costo por consulta. Si cada reporte GPS del cadete o cada evento duplicado consultara al proveedor externo, el costo crecería linealmente con la frecuencia de GPS y una caída del proveedor dejaría al sistema sin ETA.
 
 ## Decisión
-Encapsular toda interacción con el proveedor externo detrás del microservicio adaptador **`mapas/`**, gobernado por eventos de RabbitMQ (`mapas.envios`):
+Encapsular toda interacción con el proveedor externo detrás del microservicio adaptador **`mapas/`**, configurable mediante `GEOCODE_URL`, `ROUTE_URL` y `MAPAS_TIMEOUT_MS` (por defecto `MAPAS_URL=http://mock-mapas:4000`, conmutable a Nominatim + OSRM reales sin cambios de código) y gobernado por eventos de RabbitMQ (`mapas.envios`):
 
 1. **Disparo acotado por hitos del envío (NFR-3):** solo consulta geocodificación/ruteo en eventos de negocio relevantes (`envio.creado` cuando faltan coordenadas, `envio.asignado` y transición a `EN_CAMINO`), **nunca** ante reportes periódicos de GPS.
 2. **Caché de direcciones y rutas + deduplicación por `eventId`:** evita llamadas repetidas al proveedor ante direcciones recurrentes o reentregas del broker.

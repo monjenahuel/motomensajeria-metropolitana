@@ -10,7 +10,7 @@ El dominio logístico requiere que una transición de estado en un envío (creac
 Adoptar un bus de eventos centralizado en **RabbitMQ** (`broker/definitions.json`) bajo un **Topic Exchange** durable (`motomensajeria.events`) con mensajes JSON persistentes (`{ eventId, timestamp, eventType, data }`) y una estrategia de **Dead Letter Exchange** (`motomensajeria.dlx` → `q.dead-letter`).
 
 - Los productores (`envios`, `mapas`) publican eventos usando el `eventType` como *routing key* (`envio.creado`, `envio.asignado`, `envio.estado_actualizado`, `envio.geocodificado`, `envio.eta_estimado`, `envio.geocodificacion_fallida`).
-- Cada microservicio suscriptor declara su propia cola durable (`tracking.envios`, `mapas.envios`, `q.notificaciones`, `envios.geocodificacion`, `q.auditoria`) con *prefetch* acotado y confirmación manual (`ack`/`nack`).
+- `broker/definitions.json` pre-declara las colas con DLX (`q.auditoria`, `q.notificaciones`, `q.tracking` → `q.dead-letter`), mientras los microservicios activos declaran y consumen sus colas durables (`tracking.envios`, `mapas.envios`, `envios.geocodificacion` y `q.notificaciones` alineada con los mismos parámetros DLX) con *prefetch* acotado y confirmación manual (`ack`/`nack`).
 - Los consumidores implementan **idempotencia por `eventId`** para tolerar entrega *at-least-once*.
 
 ## Alternativas evaluadas

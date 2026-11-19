@@ -10,8 +10,8 @@ Durante el traslado (`EN_CAMINO`), los cadetes envían coordenadas GPS periódic
 Implementar el microservicio **`tracking/`** (NestJS) con una arquitectura híbrida de almacenamiento y difusión:
 
 1. **Redis con TTL (`tracking-redis`) para última ubicación:** cada reporte GPS válido se guarda en Redis con expiración (`TRACKING_POS_TTL_S`). Si el cadete deja de emitir señal, la posición expira automáticamente y el frontend refleja pérdida de señal sin lógica manual de limpieza.
-2. **Server-Sent Events (SSE) para difusión en vivo:** los clientes se suscriben al stream `/tracking/.../stream` (vía Gateway con cookie `mapa_token`), recibiendo actualizaciones push con reconexión controlada para revalidar permisos RBAC periódicamente.
-3. **PostgreSQL propio (`tracking-db`) + Reconciliación:** `tracking` persiste las asignaciones recibidas desde RabbitMQ (`tracking.envios`) en `tracking-db` y cuenta con `ReconciliationService`, que consulta el endpoint interno de `envios` (`/internal/tracking` protegido con `TRACKING_SYNC_SECRET`) al arrancar para recuperar asignaciones perdidas durante caídas.
+2. **Server-Sent Events (SSE) para difusión en vivo:** los clientes se suscriben al stream `/tracking/.../stream` (vía Gateway con cookie `mapa_token`), recibiendo actualizaciones push con reconexión controlada cada 30 s para revalidar permisos RBAC periódicamente.
+3. **PostgreSQL propio (`tracking-db`) + Reconciliación:** `tracking` persiste las asignaciones recibidas desde RabbitMQ (`tracking.envios`) e historial de `eventId` en `tracking-db` (`eventos_procesados`) y cuenta con `ReconciliationService`, que consulta el endpoint interno de `envios` (`/internal/tracking/asignaciones` protegido con `TRACKING_SYNC_SECRET`) al arrancar y cada 60 segundos para recuperar asignaciones perdidas durante caídas.
 
 ## Alternativas evaluadas
 1. **Polling HTTP cada pocos segundos desde `cliente-web` y `operador-front`:** descartada por mayor latencia percibida y sobrecarga innecesaria al Gateway.

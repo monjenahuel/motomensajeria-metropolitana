@@ -28,7 +28,17 @@ app.use((req, res, next) => {
   }
   res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With');
+  res.set('Access-Control-Expose-Headers', 'API-Version, Location');
+  res.set('API-Version', '1.0');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// Estrategia de versionado: prefijo /v1 oficial + alias sin prefijo por compatibilidad.
+app.use((req, res, next) => {
+  if (req.url === '/v1' || req.url.startsWith('/v1/')) {
+    req.url = req.url.slice(3) || '/';
+  }
   next();
 });
 
@@ -40,7 +50,9 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
   res.json({
     service: 'api-gateway',
-    mensaje: 'API Gateway funcionando. Las rutas /envios, /operador, /cadete, /notificaciones y /tracking requieren un token Bearer.',
+    version: '1.0',
+    prefijoVersionado: '/v1',
+    mensaje: 'API Gateway funcionando. Las rutas /v1/envios, /v1/operador, /v1/cadete, /v1/notificaciones y /v1/tracking (con alias sin prefijo) requieren un token Bearer.',
     rutas: ['/health', '/auth/token', '/auth/me', '/envios', '/operador', '/cadete', '/notificaciones', '/tracking', '/mapas'],
   });
 });
@@ -113,7 +125,8 @@ async function reenviarA(baseUrl, req, res) {
       init.headers['content-type'] = 'application/json';
       init.body = JSON.stringify(req.body);
     }
-    const respuesta = await fetch(`${baseUrl}${req.originalUrl}`, init);
+    const upstreamPath = req.originalUrl.replace(/^\/v1(?=\/|$)/, '') || '/';
+    const respuesta = await fetch(`${baseUrl}${upstreamPath}`, init);
     res.status(respuesta.status);
     const tipo = respuesta.headers.get('content-type');
     if (tipo) res.setHeader('Content-Type', tipo);
@@ -180,8 +193,9 @@ async function reenviarTracking(req, res) {
       init.body = JSON.stringify(req.body);
     }
 
-    const destino = req.originalUrl.startsWith('/mapas/tracking/')
-      ? req.originalUrl.slice('/mapas'.length) : req.originalUrl;
+    const sinVersion = req.originalUrl.replace(/^\/v1(?=\/|$)/, '') || '/';
+    const destino = sinVersion.startsWith('/mapas/tracking/')
+      ? sinVersion.slice('/mapas'.length) : sinVersion;
     const respuesta = await fetch(`${TRACKING_URL}${destino}`, init);
     res.status(respuesta.status);
 

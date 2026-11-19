@@ -6,25 +6,39 @@
 
 ## 1. Caracterización del Dominio y Carga de Diseño
 
-A partir de las especificaciones del escenario 3B se establecen los siguientes parámetros cuantitativos base para el dimensionamiento del sistema:
+A partir del análisis del escenario 3B se establecen los siguientes parámetros cuantitativos de diseño que condicionan las decisiones arquitectónicas:
 
-| Parámetro | Valor de diseño | Justificación / Origen |
+| Parámetro | Valor de diseño | Impacto arquitectónico |
 | :--- | :--- | :--- |
-| **Cadetes activos en simultáneo** | 600 cadetes | Enunciado oficial del escenario. |
-| **Volumen diario de envíos** | 15.000 envíos/día | Enunciado oficial del escenario. |
-| **Frecuencia de telemetría GPS** | 1 reporte cada 5 s por cadete | Enunciado oficial del escenario. |
-| **Throughput continuo de telemetría** | **120 req/s** ($600 \div 5\text{ s}$) | Flujo constante de ingesta en horario operativo. |
-| **Picos de telemetría estimados (5x)** | **600 req/s** | Picos de tráfico en horas pico de entrega. |
-| **Eventos transaccionales de negocio/día** | 75.000 eventos/día | 15.000 envíos $\times$ 5 transiciones de estado promedio. |
-| **Throughput medio transaccional** | **~2 a 5 ops/s** | Operaciones CRUD y cambios de estado sobre PostgreSQL. |
-| **Observadores concurrentes en vivo** | 600 a 1.200 clientes | 1 a 2 clientes siguiendo envíos en tránsito por cadete activo. |
-| **Restricción de costo de mapas** | Máx. 5 consultas por envío | $0$ consultas por reporte de telemetría. Facturación por request en API externa. |
+| **Cadetes activos en simultáneo** | 600 cadetes | Generan flujo sostenido de ubicación y sesiones concurrentes de seguimiento. |
+| **Volumen diario de envíos** | 15.000 envíos/día | ~75.000 eventos de negocio/día (~5 transiciones promedio por envío). |
+| **Frecuencia de telemetría GPS** | 1 reporte cada 5 s por cadete | Carga base continua de **120 req/s** en horario pico. |
+| **Picos estimados de telemetría (5x)** | Hasta **600 req/s** | Exige desacoplar la ingesta GPS de PostgreSQL usando Redis en memoria con TTL. |
+| **Observadores en vivo** | 600 a 1.200 clientes | Justifica propagación push por SSE (`/tracking/.../stream` y `/notificaciones/stream`) en vez de polling HTTP. |
+| **Cuota del proveedor externo de mapas** | ≤ 5 consultas/envío ($0$ por GPS) | Cobra por request; prohíbe geocodificar o rutear en cada reporte GPS. |
+| **Organización y extensibilidad** | 4 equipos independientes | Impone bajo acoplamiento para incorporar Facturación, Premios y Analítica sin tocar el *core*. |
 
 ---
 
-## 2. Escenarios de Calidad
+## 2. Priorización de Atributos de Calidad
 
-Cada requerimiento no funcional se formaliza mediante la estructura canónica de seis partes:
+En función de esta carga y las restricciones críticas del negocio, se priorizan los atributos de calidad (`NFR-1` a `NFR-7`) en consistencia con la Matriz de Pugh y los ADRs del sistema:
+
+| ID | Atributo de calidad | Prioridad | Justificación en el escenario 3B |
+| :--- | :--- | :--- | :--- |
+| **NFR-1** | Tiempo Real | **Crítica (★ NFR Estrella)** | Ingesta rápida de GPS (`202 Accepted`) y propagación en vivo por SSE de ubicaciones, estados y avisos. |
+| **NFR-2** | Extensibilidad y Desacoplamiento | **Crítica (★ NFR Estrella)** | Integrar nuevos módulos (Facturación, Premios, Analítica) vía RabbitMQ sin modificar ni redesplegar el *core*. |
+| **NFR-3** | Eficiencia de Costos en Mapas | **Alta** | Limitar consultas externas solo a hitos del envío con caché en memoria y 0 llamadas ante pings GPS. |
+| **NFR-4** | Escalabilidad Horizontal | **Alta** | Absorber ráfagas de 120 a 600 req/s replicando servicios *stateless* apoyados en Redis y RabbitMQ. |
+| **NFR-5** | Disponibilidad y Resiliencia | **Alta** | Degradar con reintentos + fallback Haversine ante fallas externas y colas durables + reconciliación en `tracking-db`. |
+| **NFR-6** | Seguridad y Control de Acceso | **Media-Alta (Obligatoria)** | Identidad OIDC (Keycloak), RBAC en dos capas, control de *ownership* por recurso y cookie `HttpOnly` para SSE. |
+| **NFR-7** | Confiabilidad e Idempotencia | **Media-Alta** | Consistencia ACID (`SELECT ... FOR UPDATE`), trazabilidad histórica e idempotencia por `eventId` ante reentregas. |
+
+---
+
+## 3. Escenarios de Calidad
+
+Cada requerimiento no funcional se formaliza mediante la estructura canónica de seis partes del SEI:
 1. **Fuente del estímulo (*Source*):** Entidad interna o externa que genera la condición.
 2. **Estímulo (*Stimulus*):** La acción, solicitud o falla que arriba al sistema.
 3. **Artefacto (*Artifact*):** Componente, subsistema o entorno que recibe el estímulo.
@@ -36,155 +50,142 @@ Cada requerimiento no funcional se formaliza mediante la estructura canónica de
 
 ### NFR-1: Tiempo Real
 
-#### Escenario 1.1: Propagación de Cambio de Estado en Vivo
-* **Fuente del estímulo:** Operador (al asignar) o Cadete (al transicionar estado: `retirado`, `en camino`, `entregado`).
-* **Estímulo:** Envío de comando vía API REST (`PATCH /envios/{id}/estado` o `POST /envios/{id}/asignar`).
-* **Artefacto:** Core de Envíos, Message Broker (RabbitMQ), Gateway/BFF y conexión en vivo (SSE/WebSocket) con el cliente.
-* **Entorno:** Operación normal con hasta 1.200 clientes con sesión de seguimiento activa.
-* **Respuesta:** El servicio persiste la transición de estado, publica el evento de dominio al broker y el Gateway propaga el cambio hacia la sesión abierta del cliente final sin requerir polling HTTP por parte del frontend.
-* **Medida de respuesta:** 
-  - Latencia extremo a extremo $\le 2{,}0\text{ s}$ en el percentil 95 ($p95$).
-  - Latencia máxima $\le 4{,}0\text{ s}$ en el percentil 99 ($p99$).
+#### Escenario 1.1: Propagación en Vivo de Estados y Avisos SSE
+* **Fuente del estímulo:** Operador o cadete autenticado.
+* **Estímulo:** Cambio de estado vía `PATCH /envios/{id}/asignar`, `POST /operador/asignaciones`, `PATCH /cadete/envios/{id}/estado` o `PATCH /envios/{id}/estado`.
+* **Artefacto:** Core `envios`, Message Broker (`motomensajeria.events`), `notificaciones` y API Gateway SSE.
+* **Entorno:** Operación normal con hasta 1.200 observadores conectados.
+* **Respuesta:** `envios` persiste la transición en PostgreSQL, publica el evento al broker y `notificaciones` empuja el aviso por `GET /notificaciones/stream` (SSE) hacia los usuarios autorizados sin requerir polling HTTP.
+* **Medida de respuesta:**
+  - Latencia extremo a extremo $\le 2{,}0\text{ s}$ ($p95$) y $\le 4{,}0\text{ s}$ ($p99$).
 
-#### Escenario 1.2: Ingesta de Telemetría GPS de Cadetes
-* **Fuente del estímulo:** Aplicación móvil de cadetes (600 emisores concurrentes).
-* **Estímulo:** Ping periódico de coordenadas GPS (frecuencia: $0{,}2\text{ Hz}$ por cadete; carga agregada: 120 req/s).
-* **Artefacto:** Ingestion Gateway / Pipeline de Telemetría y almacenamiento en memoria/caché volátil de última posición.
-* **Entorno:** Operación continua, soportando ráfagas de hasta 600 req/s.
-* **Respuesta:** Recepción, validación mínima de esquema, actualización en memoria de la última posición conocida del cadete y confirmación HTTP `202 Accepted` al dispositivo móvil, desacoplando esta ingesta de la base de datos relacional transaccional.
-* **Medida de respuesta:** 
-  - Tiempo de confirmación HTTP al dispositivo $\le 200\text{ ms}$ ($p95$) y $\le 400\text{ ms}$ ($p99$) bajo régimen de 120 req/s.
+#### Escenario 1.2: Ingesta de Telemetría GPS y Difusión en Vivo
+* **Fuente del estímulo:** Hasta 600 cadetes reportando cada 5 s.
+* **Estímulo:** `POST /tracking/ubicaciones` (120 req/s sostenidos, picos de 600 req/s).
+* **Artefacto:** API Gateway, `tracking` (`CadeteAuthGuard` + SSE) y `tracking-redis`.
+* **Entorno:** Operación continua con seguimiento activo en mapas.
+* **Respuesta:** `tracking` graba la última posición en Redis con TTL (`TRACKING_POS_TTL_S`), publica por Redis Pub/Sub y difunde vía SSE (`/tracking/stream` y `/tracking/envios/{envioId}/stream` con latido cada 15 s) sin escribir en bases relacionales.
+* **Medida de respuesta:**
+  - Confirmación `HTTP 202 Accepted` con $p95 \le 200\text{ ms}$ y $p99 \le 400\text{ ms}$.
   - Tasa de error HTTP 5xx $< 0{,}01\%$.
 
 ---
 
-### NFR-2: Extensibilidad
+### NFR-2: Extensibilidad y Desacoplamiento
 
-#### Escenario 2.1: Incorporación de Nuevos Módulos Funcionales Autónomos
-* **Fuente del estímulo:** Nuevos equipos de desarrollo (Facturación automática, Premios para cadetes, Analítica operativa).
-* **Estímulo:** Solicitud de incorporación de un nuevo módulo al ecosistema productivo.
-* **Artefacto:** Arquitectura de mensajería (RabbitMQ Topic Exchange) y microservicio Core de Envíos.
-* **Entorno:** Sistema en producción con tráfico activo sin interrupción del servicio (zero-downtime).
-* **Respuesta:** El nuevo módulo se subscribe a tópicos y colas dedicadas en el Message Broker para consumir eventos (`EnvioCreado`, `EnvioAsignado`, `EstadoActualizado`). El Core de Envíos no requiere modificación de código, cambios de configuración ni redeploy.
-* **Medida de respuesta:** 
-  - **Cero (0)** líneas de código modificadas en el Core de Envíos y servicios preexistentes.
-  - **Cero (0)** minutos de parada de servicio (downtime) en la infraestructura existente durante el deploy del nuevo módulo.
-  - Tiempo de integración de infraestructura de mensajería $\le 4$ horas/hombre.
+#### Escenario 2.1: Alta de Nuevos Consumidores sin Tocar el Core
+* **Fuente del estímulo:** Equipos independientes (Facturación automática, Premios para cadetes, Analítica operativa).
+* **Estímulo:** Despliegue de un nuevo consumidor de eventos sobre el sistema en producción.
+* **Artefacto:** RabbitMQ Topic Exchange (`motomensajeria.events`) y servicio `envios`.
+* **Entorno:** Sistema productivo activo sin ventanas de parada (*zero-downtime*).
+* **Respuesta:** El nuevo módulo declara su propia cola durable vinculada a `envio.*` (`envio.creado`, `envio.asignado`, `envio.estado_actualizado`, `envio.geocodificado`, `envio.eta_estimado`) sin modificar ni redesplegar `envios` ni `tracking`.
+* **Medida de respuesta:**
+  - **0** líneas modificadas en `envios` y `tracking`.
+  - **0 s** de *downtime* en servicios existentes.
 
-#### Escenario 2.2: Evolución de Esquemas de Eventos y Contratos
-* **Fuente del estímulo:** Equipo de Envíos agregando metadatos adicionales al evento de dominio.
-* **Estímulo:** Publicación de una versión compatible del evento con nuevos atributos opcionales.
-* **Artefacto:** Consumidores de eventos (colas existentes).
-* **Entorno:** Operación distribuida entre módulos desarrollados por diferentes equipos.
-* **Respuesta:** Los consumidores existentes continúan procesando los eventos ignorando los campos desconocidos (principio de robustez / *tolerante reader*).
-* **Medida de respuesta:** Cero roturas de compatibilidad regresiva en consumidores existentes.
+#### Escenario 2.2: Evolución Compatible de Esquemas de Eventos
+* **Fuente del estímulo:** Productor enviando metadatos opcionales en el sobre JSON `{ eventId, timestamp, eventType, data }`.
+* **Estímulo:** Publicación de evento extendido retrocompatible.
+* **Artefacto:** Consumidores existentes (`mapas`, `notificaciones`, `tracking`).
+* **Entorno:** Despliegues desacoplados entre equipos.
+* **Respuesta:** Los consumidores aplican el patrón *tolerant reader* e ignoran atributos desconocidos.
+* **Medida de respuesta:** **0** fallos de deserialización o roturas de compatibilidad regresiva.
 
 ---
 
-### NFR-3: Eficiencia de Costos
+### NFR-3: Eficiencia de Costos en Mapas Externos
 
-#### Escenario 3.1: Aislamiento Estricto de Telemetría respecto a APIs Externas Pagas
-* **Fuente del estímulo:** Flujo constante de telemetría de 600 cadetes (≈ 5,2 millones de pings/día).
-* **Estímulo:** Recepción de coordenadas geográficas en el servicio de ubicación.
-* **Artefacto:** Módulo de Telemetría e Integración con el proveedor externo de Mapas.
+#### Escenario 3.1: Aislamiento Estricto de Telemetría respecto a Mapas Pagos
+* **Fuente del estímulo:** Flujo GPS de 600 cadetes (~5,2 millones de pings/día).
+* **Estímulo:** Recepción continua de coordenadas en `POST /tracking/ubicaciones`.
+* **Artefacto:** `tracking` y adaptador `mapas/`.
 * **Entorno:** Operación normal continua.
-* **Respuesta:** El pipeline de telemetría distribuye internamente la última posición hacia los clientes conectados mediante identificador de sesión/envío sin invocar servicios de geocodificación reversa ni cálculo de matriz de distancias del proveedor externo.
-* **Medida de respuesta:** 
-  - **Exactamente 0 consultas** al servicio externo de mapas derivadas de reportes de telemetría GPS.
+* **Respuesta:** Las posiciones circulan internamente por `tracking-redis` y SSE sin invocar al proveedor externo (`mock-mapas`, Nominatim ni OSRM).
+* **Medida de respuesta:**
+  - Exactamente **0 consultas externas** derivadas de reportes de telemetría GPS.
 
-#### Escenario 3.2: Cuota Máxima de Consultas Externas por Ciclo de Vida de Envío
-* **Fuente del estímulo:** Ciclo de vida completo de un envío (creación, asignación, retiro, entrega).
-* **Estímulo:** Cambios de estado que demandan validación espacial o cálculo de ETA.
-* **Artefacto:** Adaptador del Servicio Externo de Mapas / Core de Envíos.
-* **Entorno:** 15.000 envíos procesados en el día.
-* **Respuesta:** El sistema invoca al proveedor externo únicamente en hitos discretos y memoiza/cachea resultados estáticos:
-  1. Geocodificación de dirección de retiro (1 llamada al crear).
-  2. Geocodificación de dirección de entrega (1 llamada al crear).
-  3. Estimación inicial de ruta y ETA (1 llamada al asignar).
-  4. Recálculo de ETA ante inicio de trayecto (1 llamada al pasar a `en camino`).
-* **Medida de respuesta:** 
-  - Promedio diario $\le 4{,}0$ llamadas a mapas por envío completado.
-  - Límite duro estricto $\le 5{,}0$ llamadas a mapas por envío.
-  - Volumen diario agregado $\le 75.000$ peticiones externas (reduciendo el costo en más de un 98% respecto al modelo acoplado a telemetría).
+#### Escenario 3.2: Cuota Máxima por Envío y Caché en Memoria
+* **Fuente del estímulo:** Ciclo de vida de 15.000 envíos diarios.
+* **Estímulo:** Eventos `envio.creado`, `envio.asignado` y transición a `EN_CAMINO`.
+* **Artefacto:** Adaptador `mapas/` (`cacheDirecciones`, `cacheRutas`) y `envios-db`.
+* **Entorno:** Operación diaria con direcciones nuevas o recurrentes.
+* **Respuesta:** `mapas` geocodifica origen y destino en `envio.creado` solo cuando faltan coordenadas y consulta la ruta en `envio.asignado` reutilizando `cacheRutas` en `EN_CAMINO`, mientras `envios-db` aplica `CHECK (consultas_mapas_realizadas <= 5)`.
+* **Medida de respuesta:**
+  - $\le 3\text{ a }4$ consultas promedio por envío (0 en geocodificación si ya hay coordenadas o acierto de caché).
+  - Tope estricto $\le 5$ llamadas externas por envío.
 
 ---
 
-### NFR-4: Escalabilidad Horizontal
+### NFR-4: Escalabilidad Horizontal y Rendimiento
 
-#### Escenario 4.1: Absorción de Picos de Demanda y Crecimiento de Flota
-* **Fuente del estímulo:** Duplicación de flota (1.200 cadetes) o picos de tráfico de 600 req/s.
-* **Estímulo:** Incremento de 5x en la tasa de reportes de GPS y 2x en la tasa de creación de envíos.
-* **Artefacto:** Gateway de Telemetría, Brokers de Mensajería y Workers de background.
-* **Entorno:** Picos de alta demanda horaria (ej. mediodía o días de lluvia).
-* **Respuesta:** La capa sin estado (*stateless*) escala horizontalmente instanciando réplicas de contenedores sin requerir migración de esquema de base de datos ni modificaciones arquitectónicas. El broker absorbe el exceso de carga transitoria sin rechazar mensajes.
-* **Medida de respuesta:** 
-  - La latencia $p95$ de confirmación de telemetría se conserva $\le 300\text{ ms}$.
-  - Pérdida de mensajes o eventos transaccionales: $0\%$ (cero pérdida).
+#### Escenario 4.1: Absorción de Picos 5x y Réplicas Stateless
+* **Fuente del estímulo:** Crecimiento de flota o picos horarios.
+* **Estímulo:** Ráfagas de 600 pings GPS/s y aumento de altas de envío.
+* **Artefacto:** `gateway`, `tracking`, `tracking-redis` y `rabbitmq`.
+* **Entorno:** Horas pico metropolitanas.
+* **Respuesta:** Los contenedores *stateless* escalan horizontalmente sin afinidad de sesión ni migraciones de esquema; Redis Pub/Sub distribuye posiciones entre réplicas y RabbitMQ absorbe ráfagas sin rechazar mensajes.
+* **Medida de respuesta:**
+  - Latencia $p95$ de confirmación de telemetría $\le 300\text{ ms}$.
+  - Pérdida de eventos transaccionales: **0%**.
 
 ---
 
 ### NFR-5: Disponibilidad y Resiliencia
 
-#### Escenario 5.1: Degradación Elegante ante Caída del Servicio Externo de Mapas
-* **Fuente del estímulo:** Falla de red, caída de proveedor o agotamiento de cuota en el Servicio de Mapas.
-* **Estímulo:** Timeout ($\ge 2\text{ s}$) o respuesta HTTP 5xx al solicitar estimación de tiempo o geocodificación.
-* **Artefacto:** Circuit Breaker / Fallback en el cliente HTTP del Servicio de Mapas.
-* **Entorno:** Creación de envíos o consulta de ETA en ejecución.
-* **Respuesta:** El Circuit Breaker se abre tras 3 fallas consecutivas; el sistema conmuta a un cálculo de respaldo euclidiano/heurístico local para el ETA y permite continuar la operación logística marcando el ETA como "estimado aproximado". Si falla la geocodificación inicial de dirección, se responde con un error estructurado RFC 9457 (Problem Details) con código 503 sin bloquear hilos del servidor.
-* **Medida de respuesta:** 
-  - El Core de Envíos preserva una disponibilidad $\ge 99{,}5\%$ mensual.
-  - Tiempo de apertura del Circuit Breaker $\le 3$ fallos consecutivos; tiempo de intento de recuperación (*half-open*) = 30 segundos.
+#### Escenario 5.1: Degradación Elegante ante Caída del Proveedor de Mapas
+* **Fuente del estímulo:** Falla o corte del proveedor externo (`mock-mapas` / Nominatim / OSRM).
+* **Estímulo:** Timeout (`MAPAS_TIMEOUT_MS=2000`) o respuesta HTTP 503 al geocodificar o calcular ruta.
+* **Artefacto:** Adaptador `mapas/` (`cliente-mapas.js`, `handlers.js`, `geo.js`).
+* **Entorno:** Creación y asignación de envíos en curso.
+* **Respuesta:** `mapas` ejecuta hasta 3 reintentos con backoff exponencial (500 ms, 1 s, 2 s); ante falla persistente al estimar ETA conmuta a distancia Haversine local (`VELOCIDAD_RESPALDO_KMH=25`) publicando `envio.eta_estimado` con `origenCalculo: "respaldo"`, o publica asíncronamente `envio.geocodificacion_fallida` sin bloquear `POST /envios` (`201 Created`).
+* **Medida de respuesta:**
+  - **0%** de bloqueo o degradación transaccional en el alta y asignación de `envios`.
 
-#### Escenario 5.2: Aislamiento de Fallas en Módulos Consumidores Secundarios
-* **Fuente del estímulo:** Caída imprevista del módulo de Facturación o Analítica.
-* **Estímulo:** El consumidor deja de procesar mensajes de su cola asignada.
-* **Artefacto:** Broker RabbitMQ y Core de Envíos.
-* **Entorno:** Operaciones transaccionales en curso.
-* **Respuesta:** La cola del servicio caído retiene los eventos con persistencia en disco sin desbordar la memoria. Las operaciones primarias (creación, asignación y entrega de envíos) continúan ejecutándose sin degradación de rendimiento. Al restablecerse el módulo, este drena la cola sin inconsistencias.
-* **Medida de respuesta:** 
-  - Impacto en disponibilidad de creación y asignación de envíos: **0% de degradación**.
-  - Tasa de pérdida de eventos encolados: **0%**.
+#### Escenario 5.2: Aislamiento de Fallas en Consumidores y Reconciliación de Tracking
+* **Fuente del estímulo:** Caída temporal de `notificaciones`, `mapas` o `tracking`.
+* **Estímulo:** Consumidor detenido mientras `envios` emite eventos.
+* **Artefacto:** Colas durables + DLX de RabbitMQ (`motomensajeria.dlx` → `q.dead-letter`), `tracking-db` y `ReconciliationService`.
+* **Entorno:** Operación transaccional activa.
+* **Respuesta:** RabbitMQ retiene los eventos en disco y drena las colas al recuperarse el servicio; `tracking` conserva su proyección en `tracking-db` y reconcilia al iniciar y cada 60 s vía `GET /internal/tracking/asignaciones` (`TRACKING_SYNC_SECRET`).
+* **Medida de respuesta:**
+  - **0%** de pérdida de eventos encolados ni de asignaciones vigentes.
 
 ---
 
-### NFR-6: Seguridad y Control de Acceso (RBAC / OIDC)
+### NFR-6: Seguridad y Control de Acceso (OIDC / RBAC)
 
-#### Escenario 6.1: Autorización Basada en Roles e Identidad Verificada
-* **Fuente del estímulo:** Usuario final (Cliente, Cadete u Operador) interactuando con las APIs.
-* **Estímulo:** Petición HTTP a un endpoint protegido (`POST /envios/{id}/asignar`, `PATCH /envios/{id}/estado`, `GET /envios`).
-* **Artefacto:** Middleware de Autenticación/Autorización (validación de tokens JWT emitidos por proveedor OIDC).
-* **Entorno:** Operación general.
-* **Respuesta:** El sistema verifica firma, emisor, caducidad y roles del JWT:
-  - Asignar envíos (`/asignar`): rol estricto `operador`.
-  - Actualizar estado (`/estado`): rol estricto `cadete`, restringido exclusivamente al envío asignado a su propio identificador (`sub`).
-  - Consultar envío: clientes acceden únicamente a envíos vinculados a su cuenta.
-  Peticiones sin token devuelven HTTP 401; peticiones con rol o permisos insuficientes devuelven HTTP 403 con RFC 9457.
-* **Medida de respuesta:** 
-  - $100\%$ de accesos no autorizados bloqueados en suites de prueba de seguridad.
-  - Sobrecarga computacional de validación criptográfica del JWT $\le 5\text{ ms}$ por request.
+#### Escenario 6.1: Identidad Delegada, RBAC en Dos Capas y Sesiones SSE Seguras
+* **Fuente del estímulo:** Cliente, cadete, operador o tercero externo.
+* **Estímulo:** Solicitud HTTP/SSE con credenciales ausentes, rol insuficiente o acceso a envío ajeno.
+* **Artefacto:** Keycloak OIDC, `api-gateway`, `envios`, `tracking` y `notificaciones`.
+* **Entorno:** Operación general expuesta.
+* **Respuesta:** Validación JWT vía JWKS y defensa en profundidad por rol (`administrador`, `operador`, `cadete`, `cliente`) y propiedad del recurso: responde HTTP `401` sin token válido, `403` sin rol y `404` ante envíos ajenos en formato Problem Details (`application/problem+json`). En telemetría, `CadeteAuthGuard` impone `cadeteId` desde `preferred_username`, y los mapas SSE utilizan cookie `HttpOnly` `mapa_token` (`POST /mapas/sesion`, `Max-Age=300`) con reconexión cada 30 s.
+* **Medida de respuesta:**
+  - **100%** de accesos no autorizados bloqueados y **0** tokens expuestos en URLs.
 
 ---
 
-### NFR-7: Confiabilidad, Idempotencia y Consistencia
+### NFR-7: Confiabilidad, Consistencia e Idempotencia
 
-#### Escenario 7.1: Reintentos de Red en Dispositivos Móviles de Cadetes
-* **Fuente del estímulo:** Cadete en zona de cobertura intermitente.
-* **Estímulo:** Envío duplicado del mismo comando de transición de estado con clave de idempotencia (`Idempotency-Key` o mismo estado previo).
-* **Artefacto:** API Core de Envíos y PostgreSQL (tabla de estados e historial).
-* **Entorno:** Pérdida y reconexión de conectividad 4G.
-* **Respuesta:** El servicio detecta la duplicación: no inserta registros redundantes en el historial de eventos ni publica eventos repetidos al broker. Devuelve la misma respuesta de éxito previa (`200 OK`) o `409 Conflict` si la máquina de estados prohíbe la transición requerida.
-* **Medida de respuesta:** 
-  - Cero duplicaciones en la base de datos y en los eventos de dominio ante múltiples recepciones idénticas.
+#### Escenario 7.1: Bloqueo Pesimista e Idempotencia por `eventId`
+* **Fuente del estímulo:** Operaciones concurrentes de operadores/cadetes o reentregas del broker RabbitMQ.
+* **Estímulo:** Asignación doble, mutación de un envío ya finalizado o *redelivery* de eventos.
+* **Artefacto:** `envios-db` (`historial_estados_envio`), `tracking-db` (`eventos_procesados`), `mapas` y `notificaciones`.
+* **Entorno:** Concurrencia operativa y entrega *at-least-once* en colas.
+* **Respuesta:** `envios` ejecuta transacciones con `SELECT ... FOR UPDATE`, rechaza transiciones inválidas con HTTP `409 Conflict` y registra auditoría en `historial_estados_envio`; los consumidores filtran `eventId` repetidos (tabla *inbox* `eventos_procesados` con `COMMIT` previo al `ACK` en `tracking-db`, y conjuntos en memoria acotados en `mapas` y `notificaciones`).
+* **Medida de respuesta:**
+  - **0** registros, avisos o consultas duplicadas ante concurrencia o *redelivery*.
 
 ---
 
-## 3. Matriz de Trazabilidad: Decisiones Tácticas vs. NFRs
+## 4. Matriz de Trazabilidad: Decisiones Tácticas vs. NFRs
 
 | Decisión Arquitectónica / Táctica | NFR Principal | NFR Secundario | Compromiso / Trade-off Asumido |
 | :--- | :--- | :--- | :--- |
-| **Broker de Mensajería (RabbitMQ Topic Exchange)** | **NFR-2** (Extensibilidad) | **NFR-5** (Resiliencia) | Complejidad operativa y consistencia eventual entre módulos. |
-| **Separación de Telemetría (Memoria/Caché) vs. Envíos (Postgres)** | **NFR-1** (Tiempo Real) | **NFR-4** (Escalabilidad) | Se prescinde del almacenamiento histórico persistente de pings GPS. |
-| **Proyección de asignaciones en PostgreSQL propio de Tracking** | **NFR-5** (Resiliencia) | **NFR-2** (Extensibilidad) | Copia eventualmente consistente, reconciliada periódicamente con Envíos; Redis conserva solo GPS temporal y Pub/Sub. |
-| **Cache y Llamadas en Hitos al Servicio de Mapas** | **NFR-3** (Costo) | **NFR-1** (Tiempo Real) | Las rutas entre hitos son estimadas; no se recalculan por cada ping. |
-| **Autenticación Descentralizada con JWT (OIDC)** | **NFR-6** (Seguridad) | **NFR-4** (Escalabilidad) | Validación local sin consulta síncrona al Identity Provider en cada request. |
-| **Circuit Breaker + Fallback Heurístico para Mapas** | **NFR-5** (Disponibilidad) | **NFR-3** (Costo) | En modo degradado se brinda un ETA aproximado basado en distancia euclidiana. |
+| **Broker RabbitMQ (`motomensajeria.events` + DLX)** | **NFR-2** (Extensibilidad) | **NFR-5** (Resiliencia) | Complejidad operativa y consistencia eventual entre módulos. |
+| **Separación de Telemetría (`tracking-redis` TTL + SSE) vs. `envios-db`** | **NFR-1** (Tiempo Real) | **NFR-4** (Escalabilidad) | Se prescinde del historial GPS persistido en disco a cambio de baja latencia. |
+| **Proyección `tracking-db` + `eventos_procesados` + Reconciliación 60 s** | **NFR-5** (Resiliencia) | **NFR-7** (Idempotencia) | Copia eventualmente consistente y dependencia de credencial interna `TRACKING_SYNC_SECRET`. |
+| **Adaptador `mapas/` por hitos + caché en memoria** | **NFR-3** (Costo) | **NFR-1** (Tiempo Real) | Caché local por instancia; las rutas no se recalculan en cada ping GPS. |
+| **Reintentos con backoff + fallback Haversine en `mapas/`** | **NFR-5** (Disponibilidad) | **NFR-3** (Costo) | En modo `respaldo` el ETA es aproximación lineal sin tráfico ni sentido de calles. |
+| **API Gateway + Keycloak OIDC/JWKS + Cookie `HttpOnly` `mapa_token`** | **NFR-6** (Seguridad) | **NFR-4** (Escalabilidad) | Validación criptográfica *stateless* sin consultar a Keycloak en cada request. |
+| **Transacciones `SELECT ... FOR UPDATE` + Auditoría `historial_estados_envio`** | **NFR-7** (Consistencia) | **NFR-6** (Seguridad) | Contención puntual de fila al mutar un mismo envío concurrentemente. |
