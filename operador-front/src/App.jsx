@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { api, ApiError } from './api.js';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { api, ApiError, suscribirEventos } from './api.js';
 import { getSession, logout, subscribe } from './session.js';
 import { iniciales, esVigente, idCorto } from './format.js';
 import Login from './components/Login.jsx';
@@ -29,11 +29,13 @@ function PanelOperador({ session }) {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [actualizado, setActualizado] = useState(null);
-  const [auto, setAuto] = useState(true);
+  const [syncEstado, setSyncEstado] = useState('conectando');
 
   const [toasts, setToasts] = useState([]);
   const [asignarA, setAsignarA] = useState(null);
   const [detalleId, setDetalleId] = useState(null);
+  const detalleIdRef = useRef(null);
+  const [detalleRevision, setDetalleRevision] = useState(0);
   const [liberarA, setLiberarA] = useState(null);
 
   const notificar = useCallback((tipo, mensaje) => {
@@ -67,15 +69,36 @@ function PanelOperador({ session }) {
 
   useEffect(() => {
     void cargar();
-  }, [cargar]);
+    const controller = new AbortController();
+    void suscribirEventos({
+      signal: controller.signal,
+      onEstado: (estado) => {
+        setSyncEstado(estado);
+        if (estado === 'en-vivo') {
+          void cargar({ silencioso: true });
+          if (detalleIdRef.current) setDetalleRevision((revision) => revision + 1);
+        }
+      },
+      onEvento: (evento) => {
+        void cargar({ silencioso: true });
+        if (evento?.envioId && String(evento.envioId) === String(detalleIdRef.current)) {
+          setDetalleRevision((revision) => revision + 1);
+        }
+      },
+    });
 
-  useEffect(() => {
-    if (!auto) return undefined;
-    const id = window.setInterval(() => {
-      void cargar({ silencioso: true });
-    }, 15_000);
-    return () => window.clearInterval(id);
-  }, [auto, cargar]);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void cargar({ silencioso: true });
+        if (detalleIdRef.current) setDetalleRevision((revision) => revision + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      controller.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [cargar]);
 
   async function asignar(envio, mensajero) {
     await api(`/envios/${envio.id}/asignar`, {
@@ -99,6 +122,16 @@ function PanelOperador({ session }) {
     setTab('mapa');
   }
 
+  function abrirDetalle(envioId) {
+    detalleIdRef.current = envioId;
+    setDetalleId(envioId);
+  }
+
+  function cerrarDetalle() {
+    detalleIdRef.current = null;
+    setDetalleId(null);
+  }
+
   const vigentes = asignaciones.filter((e) => esVigente(e.estado)).length;
 
   return (
@@ -113,10 +146,9 @@ function PanelOperador({ session }) {
         </div>
 
         <div className="topbar-right">
-          <label className="switch" title="Actualizar datos cada 15 segundos">
-            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
-            <span>Auto</span>
-          </label>
+          <span className="actualizado" role="status">
+            {syncEstado === 'en-vivo' ? 'En vivo' : 'Reconectando eventos…'}
+          </span>
 
           <div className="user">
             <span className="user-avatar">{iniciales(session.user.username)}</span>
@@ -155,12 +187,9 @@ function PanelOperador({ session }) {
             envios={envios}
             cargando={cargando}
             actualizado={actualizado}
-            auto={auto}
-            onAuto={setAuto}
-            onRefrescar={() => cargar()}
             onAsignar={setAsignarA}
             onLiberar={setLiberarA}
-            onDetalle={setDetalleId}
+            onDetalle={abrirDetalle}
             onSeguimiento={abrirSeguimiento}
           />
         )}
@@ -170,11 +199,8 @@ function PanelOperador({ session }) {
             asignaciones={asignaciones}
             cargando={cargando}
             actualizado={actualizado}
-            auto={auto}
-            onAuto={setAuto}
-            onRefrescar={() => cargar()}
             onLiberar={setLiberarA}
-            onDetalle={setDetalleId}
+            onDetalle={abrirDetalle}
             onSeguimiento={abrirSeguimiento}
           />
         )}
@@ -191,7 +217,7 @@ function PanelOperador({ session }) {
       )}
 
       {detalleId && (
-        <DetalleModal envioId={detalleId} onCerrar={() => setDetalleId(null)} />
+        <DetalleModal key={detalleId} envioId={detalleId} revision={detalleRevision} onCerrar={cerrarDetalle} />
       )}
 
       {liberarA && (

@@ -113,28 +113,6 @@ code {
   flex-wrap: wrap;
 }
 
-.switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-.topbar .switch {
-  color: #cbd5e1;
-}
-
-.switch input {
-  accent-color: #3b82f6;
-  width: 15px;
-  height: 15px;
-  cursor: pointer;
-}
-
 .user {
   display: flex;
   align-items: center;

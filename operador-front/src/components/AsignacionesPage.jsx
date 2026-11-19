@@ -5,9 +5,6 @@ export default function AsignacionesPage({
   asignaciones,
   cargando,
   actualizado,
-  auto,
-  onAuto,
-  onRefrescar,
   onLiberar,
   onDetalle,
   onSeguimiento,
@@ -52,13 +49,6 @@ export default function AsignacionesPage({
           </div>
           <div className="panel-tools">
             <span className="actualizado">{actualizado ? `Actualizado ${hora(actualizado)}` : '—'}</span>
-            <label className="switch">
-              <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)} />
-              <span>Auto 15 s</span>
-            </label>
-            <button type="button" className="btn btn-ghost" onClick={onRefrescar} disabled={cargando}>
-              {cargando ? 'Actualizando…' : 'Actualizar'}
-            </button>
           </div>
         </div>
 

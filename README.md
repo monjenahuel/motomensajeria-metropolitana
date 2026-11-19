@@ -153,7 +153,7 @@ Casos de uso cubiertos:
 - Ver las asignaciones vigentes y los envíos finalizados como historial (`GET /operador/asignaciones`).
 - Consultar el detalle de un envío con su historial de estados (`GET /envios/{id}`).
 - Ver el mapa en vivo embebido desde el Gateway (`:3000`).
-- Actualización automática cada 15 s y renovación automática del token.
+- Actualización en tiempo real por SSE de envíos, asignaciones y detalles abiertos, con renovación automática del token.
 
 **Desarrollo local:**
 
