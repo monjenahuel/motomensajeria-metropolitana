@@ -243,9 +243,32 @@ services:
     networks:
       - backend
 
-  # Simulador de cadetes (demo de tiempo real, ~N reportes cada 5 s)
+  # Preparación idempotente de cadetes de prueba. Solo este servicio ve las
+  # credenciales de administrador; termina antes de iniciar el simulador.
+  simulator-setup:
+    image: node:20-alpine
+    profiles: ["simulacion"]
+    working_dir: /sim
+    volumes:
+      - ./simulator:/sim:ro
+    command: [ "node", "provisionar-cadetes.js" ]
+    environment:
+      KC_URL: http://keycloak:8080
+      KC_REALM: ${KC_REALM}
+      KC_ADMIN_USER: ${KC_ADMIN_USER}
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      SIM_PASSWORD: ${SIM_PASSWORD:-cadete-sim-local}
+      SIM_CADETES: ${SIM_CADETES:-600}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # Simulador de cadetes (demo de tiempo real, N reportes cada 5 s)
   simulator:
     image: node:20-alpine
+    profiles: ["simulacion"]
     container_name: tracking-simulator
     working_dir: /sim
     volumes:
@@ -253,10 +276,14 @@ services:
     command: [ "node", "sim.js" ]
     environment:
       API: http://tracking:3000
-      N: ${SIM_CADETES:-25}
+      AUTH_URL: http://keycloak:8080/realms/${KC_REALM}/protocol/openid-connect/token
+      SIM_PASSWORD: ${SIM_PASSWORD:-cadete-sim-local}
+      N: ${SIM_CADETES:-600}
       INTERVAL_MS: ${SIM_INTERVAL_MS:-5000}
       SPEED_MS: ${SIM_SPEED_MS:-40}
     depends_on:
+      simulator-setup:
+        condition: service_completed_successfully
       tracking:
         condition: service_healthy
     networks:

@@ -71,6 +71,6 @@ curl -X POST localhost:3002/tracking/ubicaciones \
 
 - Las asignaciones se gestionan en el módulo Operador del MS de Envíos (`PATCH /envios/{id}/asignar` o `/operador/asignaciones`). Tracking consume los eventos resultantes (`envio.asignado` / `envio.estado_actualizado`) y reconcilia su proyección periódicamente.
 - Las vistas de seguimiento de la demo no autentican al cliente ni verifican que sea dueño del envío; el reporte GPS exige un token de cadete validado tanto por el Gateway como por Tracking.
-- El simulador está configurado para arrancar con Compose, pero sus reportes sin JWT serán rechazados. Para hacerlo funcionar necesita tokens de cadete válidos y el archivo `simulator/sim.js`.
+- La simulación es optativa (`docker compose --profile simulacion up -d simulator`): Compose prepara los usuarios de prueba en Keycloak antes de iniciarla; cada reporte usa un JWT del cadete correspondiente.
 - Sin buffer offline en la app del cadete, sin límites de tasa y sin réplica de Redis.
-- El simulador debe adaptar su publicación de GPS al flujo autenticado para generar posiciones visibles.
+- Los usuarios `cadete.sim.NNN` son solo para desarrollo; el simulador obtiene y renueva sus tokens sin desactivar la autenticación de Tracking.

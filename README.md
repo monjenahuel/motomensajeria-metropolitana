@@ -44,7 +44,7 @@ Sistema de logística urbana implementado con **Microservicios**, **Arquitectura
 7. **Tracking (interno)**: Microservicio NestJS de posiciones en tiempo real (SSE). Guarda GPS temporal en Redis y proyección durable de asignaciones en su propio PostgreSQL. Consume eventos de RabbitMQ y reconcilia periódicamente con Envíos (fuente de verdad). El acceso externo pasa por el Gateway.
 8. **tracking-redis (`:6379` interno)**: Estado vivo del tracking (sin persistencia). Cada posición expira según `TRACKING_POS_TTL_S` si el cadete deja de reportar.
 9. **tracking-db (interno)**: PostgreSQL exclusivo de Tracking con volumen persistente para asignaciones e inbox de eventos.
-10. **Simulador**: Configurado para arrancar con el stack; sus reportes GPS requieren tokens de cadete válidos.
+10. **Simulador (optativo)**: Se inicia solo al activar el perfil `simulacion`; prepara usuarios de prueba en Keycloak y arranca 600 cadetes con tokens individuales renovables.
 11. **Frontend del Operador (`:5173`)**: Aplicación React (Vite) con login contra Keycloak vía Gateway. Permite listar y filtrar envíos, asignarlos a un cadete, liberar asignaciones, consultar el historial y ver el mapa en vivo.
 
 ---
@@ -81,7 +81,7 @@ Tracking lee las asignaciones desde su PostgreSQL, incluso si Redis o Envíos es
 Al iniciar y cada 60 segundos reconcilia en segundo plano con Envíos usando `TRACKING_SYNC_SECRET`;
 no consulta Envíos por cada mapa. Si se perdió un evento, la recuperación es eventual.
 
-**Simulador:** Compose intenta arrancarlo con el stack, pero Tracking rechazará sus reportes GPS sin un token válido de cadete. En este checkout falta `simulator/sim.js`; para usarlo hay que incorporar el script y adaptarlo al flujo autenticado.
+**Simulador (solo desarrollo):** `docker compose up -d --build` no inicia la simulación. Para mostrar los 600 cadetes después de la demo con `cadete.demo`, ejecutar `docker compose --profile simulacion up -d simulator`. El servicio `simulator-setup` prepara automáticamente `cadete.sim.001` a `cadete.sim.600` con perfil completo y rol `cadete`, y después inicia el simulador. Cada cadete obtiene y renueva su propio token de Keycloak; Tracking verifica ese token y toma de él la identidad. Con el intervalo de 5 s son ~120 reportes/s. Se puede ajustar `SIM_CADETES`, `SIM_INTERVAL_MS` y `SIM_PASSWORD` en `.env` (por defecto 600, 5000 ms y una contraseña de demo). El servicio `simulator-setup` solo usa el administrador de Keycloak durante la preparación y repara los perfiles existentes y sincroniza la contraseña de usuarios simulados si cambia. Revisar `docker compose logs simulator-setup simulator` si no aparecen posiciones. Para parar la simulación, ejecutar `docker compose stop simulator`. El mapa global del operador ve todos los cadetes; para seguir un envío hay que asignarle uno de ellos. Ver también [comandos-demo.md](comandos-demo.md). No activar este simulador ni usar sus credenciales de demo en producción.
 
 **Módulo Operador (asignaciones):** el MS de Envíos es el dueño de las asignaciones. Persiste en PostgreSQL y publica el evento `envio.asignado`; Tracking lo consume para actualizar su proyección y la reconcilia periódicamente con Envíos.
 
