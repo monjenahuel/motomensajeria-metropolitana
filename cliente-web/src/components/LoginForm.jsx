@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { LogIn, KeyRound, AlertCircle } from 'lucide-react';
 
 export default function LoginForm({ onLoginSuccess }) {
   const [username, setUsername] = useState('cliente.demo');
@@ -20,100 +19,63 @@ export default function LoginForm({ onLoginSuccess }) {
     }
   };
 
-  const setCredencialesRapidas = (u, p) => {
-    setUsername(u);
-    setPassword(p);
-  };
-
   return (
-    <div style={{ maxWidth: '420px', margin: '4rem auto 0 auto' }}>
-      <div className="card" style={{ padding: '2rem' }}>
-        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
-          <div style={{
-            display: 'inline-flex',
-            padding: '0.75rem',
-            background: '#eff6ff',
-            color: 'var(--primary)',
-            borderRadius: '50%',
-            marginBottom: '0.75rem'
-          }}>
-            <KeyRound size={28} />
+    <div className="login">
+      <div className="login-card">
+        <div className="brand login-brand">
+          <span className="brand-mark">MM</span>
+          <div className="brand-text">
+            <strong>MotoMensajería</strong>
+            <span>Portal del Cliente</span>
           </div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Iniciar Sesión</h2>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-            Autenticación OIDC centralizada vía API Gateway
-          </p>
         </div>
 
-        {error && (
-          <div style={{
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            color: '#991b1b',
-            padding: '0.75rem',
-            borderRadius: '0.5rem',
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            marginBottom: '1rem'
-          }}>
-            <AlertCircle size={18} />
-            <span>{error}</span>
-          </div>
-        )}
+        <h1>Iniciar sesión</h1>
+        <p className="muted">Autenticación OIDC centralizada vía API Gateway.</p>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.825rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-              Usuario (Keycloak)
-            </label>
+        <form className="form" onSubmit={handleSubmit}>
+          <label>
+            Usuario
             <input
+              className="input"
               type="text"
-              className="input-field"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Ej: cliente.demo"
+              placeholder="cliente.demo"
+              autoComplete="username"
               required
             />
-          </div>
+          </label>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '0.825rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-              Contraseña
-            </label>
+          <label>
+            Contraseña
             <input
+              className="input"
               type="password"
-              className="input-field"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
+              autoComplete="current-password"
               required
             />
-          </div>
+          </label>
 
-          <button
-            type="submit"
-            className="btn btn-primary"
-            style={{ width: '100%', marginTop: '0.5rem', padding: '0.75rem' }}
-            disabled={loading}
-          >
-            <LogIn size={18} />
-            <span>{loading ? 'Autenticando...' : 'Ingresar'}</span>
+          {error && <div className="alerta alerta-error" role="alert">{error}</div>}
+
+          <button type="submit" className="btn btn-primary btn-block" disabled={loading}>
+            {loading ? 'Ingresando…' : 'Ingresar'}
           </button>
         </form>
 
-        <div style={{ marginTop: '1.5rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-color)' }}>
-          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-            Acceso rápido para demostración:
-          </p>
+        <div className="login-demo">
+          Cuenta demo: <strong>cliente.demo</strong> / <code>cliente123</code>{' '}
           <button
             type="button"
-            className="btn btn-outline"
-            style={{ width: '100%', fontSize: '0.8rem', padding: '0.4rem' }}
-            onClick={() => setCredencialesRapidas('cliente.demo', 'cliente123')}
+            className="btn btn-ghost btn-sm"
+            style={{ marginLeft: '6px' }}
+            onClick={() => { setUsername('cliente.demo'); setPassword('cliente123'); }}
           >
-            Cargar credenciales de <strong>cliente.demo</strong>
+            Usar
           </button>
         </div>
       </div>

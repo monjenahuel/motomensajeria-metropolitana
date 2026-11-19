@@ -53,3 +53,51 @@ export async function api(path, options = {}) {
 
   return data;
 }
+
+/** Suscripción SSE a eventos de envíos vía Gateway (/notificaciones/stream). */
+export async function suscribirEventos({ onEvento, onEstado, signal }) {
+  while (!signal.aborted) {
+    try {
+      let respuesta = await ejecutar('/notificaciones/stream', {
+        signal,
+        headers: { Accept: 'text/event-stream' },
+      });
+      if (respuesta.status === 401) {
+        await refrescarSesion(true);
+        respuesta = await ejecutar('/notificaciones/stream', {
+          signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+      }
+      if (!respuesta.ok || !respuesta.body) {
+        throw new Error(`HTTP ${respuesta.status}`);
+      }
+
+      onEstado?.('en-vivo');
+      const reader = respuesta.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const bloques = buffer.split('\n\n');
+        buffer = bloques.pop() ?? '';
+        for (const bloque of bloques) {
+          const linea = bloque.split('\n').find((l) => l.startsWith('data:'));
+          if (!linea) continue;
+          try {
+            onEvento(JSON.parse(linea.slice(5).trim()));
+          } catch {
+            // Ignora frames no JSON (pings/comentarios)
+          }
+        }
+      }
+    } catch {
+      if (signal.aborted) return;
+      onEstado?.('reconectando');
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}

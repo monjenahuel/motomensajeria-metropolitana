@@ -99,8 +99,15 @@ app.get('/auth/me', authenticate, (req, res) => {
 // Reenvía método, body y token al microservicio. La autorización fina por rol (y por dueño del envío)
 // la vuelve a aplicar el propio microservicio.
 async function reenviarA(baseUrl, req, res) {
+  const controller = new AbortController();
+  res.on('close', () => controller.abort());
+
   try {
-    const init = { method: req.method, headers: { authorization: req.headers.authorization } };
+    const init = {
+      method: req.method,
+      headers: { authorization: req.headers.authorization },
+      signal: controller.signal,
+    };
     const tieneBody = !['GET', 'HEAD'].includes(req.method) && req.body && Object.keys(req.body).length > 0;
     if (tieneBody) {
       init.headers['content-type'] = 'application/json';
@@ -109,13 +116,23 @@ async function reenviarA(baseUrl, req, res) {
     const respuesta = await fetch(`${baseUrl}${req.originalUrl}`, init);
     res.status(respuesta.status);
     const tipo = respuesta.headers.get('content-type');
-    if (tipo) res.type(tipo);
+    if (tipo) res.setHeader('Content-Type', tipo);
     const location = respuesta.headers.get('location');
     if (location) res.set('Location', location);
+
+    if (tipo?.includes('text/event-stream') && respuesta.body) {
+      res.setHeader('Cache-Control', respuesta.headers.get('cache-control') ?? 'no-cache, no-transform');
+      res.setHeader('X-Accel-Buffering', 'no');
+      const stream = Readable.fromWeb(respuesta.body);
+      stream.on('error', () => res.end());
+      return stream.pipe(res);
+    }
+
     res.send(Buffer.from(await respuesta.arrayBuffer()));
   } catch (err) {
+    if (controller.signal.aborted) return;
     console.error(err);
-    problem(res, 502, 'Servicio no disponible', 'No se pudo contactar al microservicio de envíos.', req.originalUrl);
+    problem(res, 502, 'Servicio no disponible', 'No se pudo contactar al microservicio solicitado.', req.originalUrl);
   }
 }
 
@@ -124,6 +141,9 @@ const reenviarNotificaciones = (req, res) => reenviarA(NOTIFICACIONES_URL, req, 
 
 // El gateway rechaza lo obvio: sin token válido (401) o sin ningún rol de la aplicación (403).
 app.use('/envios', authenticate, requireRole(...ROLES_APP), reenviar);
+
+// Stream SSE de notificaciones/eventos para todos los roles autenticados (incluye cadete).
+app.get('/notificaciones/stream', authenticate, requireRole(...ROLES_APP), reenviarNotificaciones);
 
 // Avisos al cliente (microservicio de notificaciones): el cliente ve los suyos, el staff todos.
 app.use('/notificaciones', authenticate, requireRole('cliente', 'operador', 'administrador'), reenviarNotificaciones);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { getSession, subscribe, logout } from './session.js';
-import { api } from './api.js';
+import { api, suscribirEventos } from './api.js';
 import { claseEstado, ESTADO_LABEL, esFinal, fecha, idCorto } from './format.js';
 import Login from './components/Login.jsx';
 import Modal from './components/Modal.jsx';
@@ -19,6 +19,7 @@ function Panel({ session }) {
   const [busqueda, setBusqueda] = useState('');
   const [filtro, setFiltro] = useState('TODOS');
   const [seleccion, setSeleccion] = useState(null);
+  const [syncEstado, setSyncEstado] = useState('conectando');
 
   const cargar = useCallback(async () => {
     try {
@@ -34,8 +35,26 @@ function Panel({ session }) {
 
   useEffect(() => {
     void cargar();
-    const timer = window.setInterval(cargar, 15000);
-    return () => window.clearInterval(timer);
+    const controller = new AbortController();
+
+    void suscribirEventos({
+      signal: controller.signal,
+      onEstado: setSyncEstado,
+      onEvento: (evento) => {
+        if (evento?.mensaje) setAviso(evento.mensaje);
+        void cargar();
+      },
+    });
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void cargar();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      controller.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [cargar]);
 
   async function cambiar(estado, motivo) {
@@ -69,7 +88,18 @@ function Panel({ session }) {
           ))}
         </div>
         <section className="panel">
-          <div className="panel-head"><div><h2>Mis envíos</h2><p>Actualización automática cada 15 segundos. Hasta 100 envíos asignados a tu usuario.</p></div><button className="btn btn-ghost" onClick={cargar} disabled={cargando}>Actualizar</button></div>
+          <div className="panel-head">
+            <div>
+              <h2>Mis envíos</h2>
+              <p>
+                {syncEstado === 'en-vivo'
+                  ? 'Sincronizado en tiempo real con eventos del broker.'
+                  : 'Conectando al stream de eventos en tiempo real…'}
+                {' '}Hasta 100 envíos asignados a tu usuario.
+              </p>
+            </div>
+            <button className="btn btn-ghost" onClick={cargar} disabled={cargando}>Actualizar</button>
+          </div>
           <div className="filtros">
             <input className="input" type="search" aria-label="Buscar envíos" placeholder="Buscar por ID, recorrido o cliente" value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
             <select className="input" aria-label="Filtrar por estado" value={filtro} onChange={(e) => setFiltro(e.target.value)}>

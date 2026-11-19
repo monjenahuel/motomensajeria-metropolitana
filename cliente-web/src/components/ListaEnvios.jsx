@@ -1,69 +1,100 @@
-import React from 'react';
-import { Package, RefreshCw, Eye, UserCheck, Calendar } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
 import { idCorto } from '../format';
 
-export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, onSeguimiento }) {
-  const getBadgeClass = (estado) => {
-    switch (estado) {
-      case 'PENDIENTE': return 'badge-pendiente';
-      case 'ASIGNADO': return 'badge-asignado';
-      case 'EN_CAMINO': return 'badge-en-camino';
-      case 'ENTREGADO': return 'badge-entregado';
-      default: return 'badge-pendiente';
-    }
-  };
+const ESTADO_LABEL = {
+  PENDIENTE: 'Pendiente',
+  ASIGNADO: 'Asignado',
+  EN_CAMINO: 'En camino',
+  ENTREGADO: 'Entregado',
+  NO_ENTREGADO: 'No entregado',
+  CANCELADO: 'Cancelado',
+};
+
+export default function ListaEnvios({ envios, loading, syncEstado, onRefresh, onVerDetalle, onSeguimiento }) {
+  const [busqueda, setBusqueda] = useState('');
+  const [estadoFiltro, setEstadoFiltro] = useState('TODOS');
+
+  const filtrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return envios.filter((e) => {
+      if (estadoFiltro !== 'TODOS' && e.estado !== estadoFiltro) return false;
+      if (!q) return true;
+      return [e.id, e.origen, e.destino, e.mensajero, e.estado]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [envios, busqueda, estadoFiltro]);
 
   const formatearFecha = (fechaStr) => {
-    if (!fechaStr) return '-';
+    if (!fechaStr) return '—';
     const d = new Date(fechaStr);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' (' + d.toLocaleDateString() + ')';
+    return `${d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · ${d.toLocaleDateString('es-AR')}`;
   };
 
   return (
-    <div className="card">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Package size={20} color="var(--primary)" />
-          <h2 style={{ fontSize: '1.125rem', fontWeight: 600 }}>Mis Envíos</h2>
-          <span style={{ fontSize: '0.75rem', background: '#f1f5f9', padding: '0.15rem 0.5rem', borderRadius: '9999px', fontWeight: 600 }}>
-            {envios.length}
-          </span>
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>Mis envíos</h2>
+          <p>
+            {syncEstado === 'en-vivo'
+              ? 'Sincronizado en tiempo real con eventos del broker.'
+              : 'Conectando al stream de eventos…'}
+            {' '}Hacé clic en el ID cuando el envío esté en camino para ver el mapa en vivo.
+          </p>
         </div>
-
-        <button
-          onClick={onRefresh}
-          className="btn btn-outline"
-          disabled={loading}
-          style={{ padding: '0.4rem 0.8rem', fontSize: '0.825rem' }}
-          title="Actualizar lista de envíos"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          <span>Refrescar</span>
+        <button type="button" className="btn btn-ghost" onClick={onRefresh} disabled={loading}>
+          {loading ? 'Actualizando…' : 'Actualizar'}
         </button>
       </div>
 
-      {envios.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
-          <Package size={40} strokeWidth={1.5} style={{ margin: '0 auto 0.75rem auto', opacity: 0.5 }} />
-          <p style={{ fontWeight: 500 }}>No tenés envíos registrados aún.</p>
-          <p style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>Creá tu primer pedido usando el formulario de arriba.</p>
-        </div>
+      <div className="filtros">
+        <input
+          className="input"
+          type="search"
+          aria-label="Buscar envíos"
+          placeholder="Buscar por ID, origen, destino o cadete"
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+        />
+        <select
+          className="input"
+          aria-label="Filtrar por estado"
+          value={estadoFiltro}
+          onChange={(e) => setEstadoFiltro(e.target.value)}
+          style={{ width: 'auto', minWidth: '180px' }}
+        >
+          <option value="TODOS">Todos los estados</option>
+          {Object.entries(ESTADO_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+      </div>
+
+      {!filtrados.length ? (
+        <p className="vacio">
+          {envios.length === 0
+            ? 'No tenés envíos registrados aún. Creá tu primer pedido arriba.'
+            : 'No hay envíos que coincidan con el filtro.'}
+        </p>
       ) : (
-        <div className="table-responsive">
-          <table>
+        <div className="tabla-wrap">
+          <table className="tabla">
             <thead>
               <tr>
-                <th>Seguimiento</th>
+                <th>ID</th>
                 <th>Origen</th>
                 <th>Destino</th>
                 <th>Estado</th>
-                <th>Cadete Asignado</th>
+                <th>Cadete</th>
                 <th>Creación</th>
-                <th style={{ textAlign: 'right' }}>Acción</th>
+                <th style={{ textAlign: 'right' }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {envios.map((envio) => (
+              {filtrados.map((envio) => (
                 <tr key={envio.id}>
                   <td>
                     {envio.estado === 'EN_CAMINO' ? (
@@ -76,47 +107,39 @@ export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, 
                         {idCorto(envio.id)}
                       </button>
                     ) : (
-                      <span style={{ fontFamily: 'monospace' }} title={`${envio.id} · El mapa solo está disponible cuando el envío está en camino`}>
+                      <code title={`${envio.id} · El mapa se habilita cuando el envío está en camino`}>
                         {idCorto(envio.id)}
-                      </span>
+                      </code>
                     )}
                   </td>
-                  <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {envio.origen}
-                  </td>
-                  <td style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {envio.destino}
-                  </td>
+                  <td>{envio.origen}</td>
+                  <td>{envio.destino}</td>
                   <td>
-                    <span className={`badge ${getBadgeClass(envio.estado)}`}>
-                      {envio.estado}
+                    <span className={`estado estado-${String(envio.estado).toLowerCase()}`}>
+                      {ESTADO_LABEL[envio.estado] || envio.estado}
                     </span>
                   </td>
-                  <td>
-                    {envio.mensajero ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-main)', fontSize: '0.85rem' }}>
-                        <UserCheck size={14} color="#16a34a" />
-                        <strong>{envio.mensajero}</strong>
-                      </span>
-                    ) : (
-                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', fontStyle: 'italic' }}>
-                        Sin asignar
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    {formatearFecha(envio.fecha_creacion)}
-                  </td>
+                  <td>{envio.mensajero || 'Sin asignar'}</td>
+                  <td>{formatearFecha(envio.creado_en)}</td>
                   <td style={{ textAlign: 'right' }}>
-                    <button
-                      className="btn btn-outline"
-                      onClick={() => onVerDetalle(envio.id)}
-                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                      title="Ver trazabilidad e historial"
-                    >
-                      <Eye size={14} />
-                      <span>Detalle</span>
-                    </button>
+                    <div className="panel-tools" style={{ justifyContent: 'flex-end' }}>
+                      {envio.estado === 'EN_CAMINO' && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => onSeguimiento(envio.id)}
+                        >
+                          Ver mapa
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => onVerDetalle(envio.id)}
+                      >
+                        Detalle
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -124,6 +147,6 @@ export default function ListaEnvios({ envios, loading, onRefresh, onVerDetalle, 
           </table>
         </div>
       )}
-    </div>
+    </section>
   );
 }

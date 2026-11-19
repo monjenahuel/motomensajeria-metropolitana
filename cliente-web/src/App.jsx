@@ -1,65 +1,105 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Navbar from './components/Navbar';
 import LoginForm from './components/LoginForm';
 import CrearEnvioForm from './components/CrearEnvioForm';
 import ListaEnvios from './components/ListaEnvios';
 import DetalleEnvioModal from './components/DetalleEnvioModal';
 import MapaEnvio from './components/MapaEnvio';
-import { login, getMe, getEnvios, crearEnvio, getEnvioDetalle, cerrarSesionMapa } from './services/api';
+import {
+  login,
+  getMe,
+  getEnvios,
+  crearEnvio,
+  getEnvioDetalle,
+  getNotificaciones,
+  suscribirNotificaciones,
+  cerrarSesionMapa,
+} from './services/api';
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [usuario, setUsuario] = useState(null);
   const [envios, setEnvios] = useState([]);
+  const [avisos, setAvisos] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [syncEstado, setSyncEstado] = useState('conectando');
   const [envioSeleccionado, setEnvioSeleccionado] = useState(null);
   const [seguimientoId, setSeguimientoId] = useState(null);
 
-  // Al montar o cambiar token, validar sesión
-  useEffect(() => {
-    if (token) {
-      cargarUsuarioYEnvios(token);
-    } else {
-      setUsuario(null);
-      setEnvios([]);
-    }
-  }, [token]);
+  const handleLogout = useCallback(() => {
+    void cerrarSesionMapa().catch(() => {});
+    localStorage.removeItem('token');
+    setToken('');
+    setUsuario(null);
+    setEnvios([]);
+    setAvisos([]);
+    setEnvioSeleccionado(null);
+    setSeguimientoId(null);
+  }, []);
 
-  const cargarUsuarioYEnvios = async (authToken) => {
+  const cargarTodo = useCallback(async (authToken) => {
     setLoading(true);
     try {
-      const user = await getMe(authToken);
+      const [user, lista, notas] = await Promise.all([
+        getMe(authToken),
+        getEnvios(authToken),
+        getNotificaciones(authToken),
+      ]);
       setUsuario(user);
-      const lista = await getEnvios(authToken);
       setEnvios(lista);
+      setAvisos(notas.slice(-5).reverse());
     } catch (err) {
       console.warn('Sesión no válida o expirada:', err.message);
       handleLogout();
     } finally {
       setLoading(false);
     }
-  };
+  }, [handleLogout]);
+
+  useEffect(() => {
+    if (!token) {
+      setUsuario(null);
+      setEnvios([]);
+      setAvisos([]);
+      return undefined;
+    }
+
+    void cargarTodo(token);
+    const controller = new AbortController();
+
+    void suscribirNotificaciones({
+      token,
+      signal: controller.signal,
+      onEstado: setSyncEstado,
+      onEvento: (aviso) => {
+        if (aviso?.id) {
+          setAvisos((prev) => [aviso, ...prev.filter((x) => x.id !== aviso.id)].slice(0, 5));
+        }
+        void getEnvios(token).then(setEnvios).catch(() => {});
+      },
+    });
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void getEnvios(token).then(setEnvios).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      controller.abort();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [token, cargarTodo]);
 
   const handleLogin = async (username, password) => {
     const data = await login(username, password);
-    const accessToken = data.access_token;
-    localStorage.setItem('token', accessToken);
-    setToken(accessToken);
-  };
-
-  const handleLogout = () => {
-    void cerrarSesionMapa().catch(() => {});
-    localStorage.removeItem('token');
-    setToken('');
-    setUsuario(null);
-    setEnvios([]);
-    setEnvioSeleccionado(null);
-    setSeguimientoId(null);
+    localStorage.setItem('token', data.access_token);
+    setToken(data.access_token);
   };
 
   const handleCrearEnvio = async (payload) => {
     await crearEnvio(token, payload);
-    // Refrescar lista tras creación
     const lista = await getEnvios(token);
     setEnvios(lista);
   };
@@ -77,8 +117,9 @@ export default function App() {
     if (!token) return;
     setLoading(true);
     try {
-      const lista = await getEnvios(token);
+      const [lista, notas] = await Promise.all([getEnvios(token), getNotificaciones(token)]);
       setEnvios(lista);
+      setAvisos(notas.slice(-5).reverse());
     } catch (err) {
       console.error(err);
     } finally {
@@ -86,44 +127,82 @@ export default function App() {
     }
   };
 
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <Navbar usuario={usuario} onLogout={handleLogout} />
+  const stats = useMemo(() => ({
+    total: envios.length,
+    pendientes: envios.filter((e) => e.estado === 'PENDIENTE').length,
+    enCamino: envios.filter((e) => e.estado === 'EN_CAMINO').length,
+    entregados: envios.filter((e) => e.estado === 'ENTREGADO').length,
+  }), [envios]);
 
-      <main className="container" style={{ flex: 1, paddingBottom: '3rem' }}>
-        {!token || !usuario ? (
-          <LoginForm onLoginSuccess={handleLogin} />
-        ) : seguimientoId ? (
+  if (!token || !usuario) {
+    return <LoginForm onLoginSuccess={handleLogin} />;
+  }
+
+  return (
+    <div className="app">
+      <Navbar usuario={usuario} syncEstado={syncEstado} onLogout={handleLogout} />
+
+      <main className="contenido">
+        {seguimientoId ? (
           <MapaEnvio envioId={seguimientoId} token={token} onVolver={() => setSeguimientoId(null)} />
         ) : (
-          <div>
-            <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <div>
-                <h2 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Panel de Envíos</h2>
-                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                  Gestioná y seguí en tiempo real tus solicitudes de mensajería
-                </p>
+          <>
+            <div className="stats">
+              <div className="stat">
+                <span className="stat-valor">{stats.total}</span>
+                <span className="stat-etiqueta">Mis envíos</span>
+              </div>
+              <div className="stat stat-pendiente">
+                <span className="stat-valor">{stats.pendientes}</span>
+                <span className="stat-etiqueta">Pendientes</span>
+              </div>
+              <div className="stat stat-camino">
+                <span className="stat-valor">{stats.enCamino}</span>
+                <span className="stat-etiqueta">En camino</span>
+              </div>
+              <div className="stat stat-finalizado">
+                <span className="stat-valor">{stats.entregados}</span>
+                <span className="stat-etiqueta">Entregados</span>
               </div>
             </div>
 
             <CrearEnvioForm onCrear={handleCrearEnvio} />
 
+            {avisos.length > 0 && (
+              <section className="panel">
+                <div className="panel-head">
+                  <div>
+                    <h2>Últimos avisos</h2>
+                    <p>Notificaciones recibidas en tiempo real desde RabbitMQ.</p>
+                  </div>
+                </div>
+                <ul className="avisos-lista">
+                  {avisos.map((a) => (
+                    <li key={a.id} className="aviso-item">
+                      <span>{a.mensaje}</span>
+                      <span className="aviso-hora">
+                        {new Date(a.creadaEn).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             <ListaEnvios
               envios={envios}
               loading={loading}
+              syncEstado={syncEstado}
               onRefresh={handleRefrescar}
               onVerDetalle={handleVerDetalle}
               onSeguimiento={setSeguimientoId}
             />
-          </div>
+          </>
         )}
       </main>
 
-      <footer style={{ borderTop: '1px solid var(--border-color)', padding: '1.25rem 0', background: '#ffffff', textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-        <p>Motomensajería Metropolitana — Arquitectura de Software 1 · UNAHUR</p>
-        <p style={{ fontSize: '0.725rem', marginTop: '0.25rem' }}>
-          Stack PERN · Arquitectura Dirigida por Eventos (EDA) · Autenticación OIDC vía API Gateway
-        </p>
+      <footer className="footer">
+        Motomensajería Metropolitana — Arquitectura de Software 1 · UNAHUR
       </footer>
 
       {envioSeleccionado && (

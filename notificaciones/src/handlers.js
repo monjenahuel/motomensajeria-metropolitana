@@ -9,6 +9,7 @@ const corto = (id) => String(id).slice(-6); // los ids son UUID: para el aviso a
 export function crearNotificaciones({ log = console, max = 1000 } = {}) {
   const lista = [];
   const vistos = new Set(); // eventId ya procesados: un evento reentregado no duplica el aviso
+  const suscriptores = new Set();
   let secuencia = 0;
 
   function mensajePara({ tipo, data: d }) {
@@ -50,12 +51,16 @@ export function crearNotificaciones({ log = console, max = 1000 } = {}) {
 
     const n = {
       id: ++secuencia, eventId: env.eventId, cliente: env.data.cliente,
+      mensajero: env.data.mensajero ?? null,
       envioId: env.data.envioId ?? env.data.id, tipo: env.tipo, mensaje, creadaEn: new Date().toISOString(),
     };
     lista.push(n);
     if (lista.length > max) lista.shift();
     // Canal simulado: un log. Acá se enchufaría un mail, un push o un SMS.
     log.info(`[AVISO -> ${n.cliente}] ${mensaje}`);
+    for (const fn of suscriptores) {
+      try { fn(n); } catch (err) { log.warn('Error en suscriptor SSE:', err.message); }
+    }
     return n;
   }
 
@@ -66,5 +71,10 @@ export function crearNotificaciones({ log = console, max = 1000 } = {}) {
       && (envioId === undefined || String(n.envioId) === String(envioId)));
   }
 
-  return { procesar, listar };
+  function suscribir(fn) {
+    suscriptores.add(fn);
+    return () => suscriptores.delete(fn);
+  }
+
+  return { procesar, listar, suscribir };
 }

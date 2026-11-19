@@ -19,22 +19,24 @@ export default function MapaEnvio({ envioId, token, onVolver }) {
   }, [token, envioId]);
 
   return (
-    <section className="card mapa-envio">
-      <div className="mapa-envio-header">
+    <section className="panel">
+      <div className="panel-head">
         <div>
-          <h2>Seguimiento del envío</h2>
-          <p title={envioId}>{idCorto(envioId)}</p>
+          <h2>Seguimiento del envío · {idCorto(envioId)}</h2>
+          <p title={envioId}>Ubicación en vivo vía SSE y cookie HttpOnly autorizada en el Gateway.</p>
         </div>
-        <button type="button" className="btn btn-outline" onClick={onVolver}>
+        <button type="button" className="btn btn-ghost" onClick={onVolver}>
           Volver a mis envíos
         </button>
       </div>
-      {error && <p role="alert">{error}</p>}
-      {listo && <iframe
-        className="mapa-envio-frame"
-        title={`Mapa de seguimiento del envío ${envioId}`}
-        src={url}
-      />}
+      {error && <div className="panel-body"><div className="alerta alerta-error" role="alert">{error}</div></div>}
+      {listo && (
+        <iframe
+          className="mapa-envio-frame"
+          title={`Mapa de seguimiento del envío ${envioId}`}
+          src={url}
+        />
+      )}
     </section>
   );
 }

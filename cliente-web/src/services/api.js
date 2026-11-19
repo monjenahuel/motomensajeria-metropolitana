@@ -96,3 +96,58 @@ export async function getEnvioDetalle(token, id) {
   }
   return await res.json();
 }
+
+/**
+ * Lista los avisos recientes del cliente en el microservicio de notificaciones.
+ */
+export async function getNotificaciones(token, desde = 0) {
+  const res = await fetch(`${API_BASE_URL}/notificaciones?desde=${desde}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  return await res.json();
+}
+
+/**
+ * Se suscribe al stream SSE de eventos/notificaciones vía Gateway.
+ */
+export async function suscribirNotificaciones({ token, onEvento, onEstado, signal }) {
+  while (!signal.aborted) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/notificaciones/stream`, {
+        signal,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'text/event-stream',
+        },
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      onEstado?.('en-vivo');
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const bloques = buffer.split('\n\n');
+        buffer = bloques.pop() ?? '';
+        for (const bloque of bloques) {
+          const linea = bloque.split('\n').find((l) => l.startsWith('data:'));
+          if (!linea) continue;
+          try {
+            onEvento(JSON.parse(linea.slice(5).trim()));
+          } catch {
+            // Ignora frames no JSON (pings/comentarios)
+          }
+        }
+      }
+    } catch {
+      if (signal.aborted) return;
+      onEstado?.('reconectando');
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
